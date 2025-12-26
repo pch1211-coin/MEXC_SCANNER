@@ -179,8 +179,8 @@ function buildTop30FromSnaps(snaps) {
  * - maxSymbols로 속도 조절
  */
 export async function runTop30Scan({
-  maxSymbols = Number(process.env.MAX_SYMBOLS || 200),
-  concurrency = Number(process.env.CONCURRENCY || 4)
+  maxSymbols = Number(process.env.MAX_SYMBOLS || 80),
+  concurrency = Number(process.env.CONCURRENCY || 2)
 } = {}) {
   const contracts = await fetchAllContracts();
 
