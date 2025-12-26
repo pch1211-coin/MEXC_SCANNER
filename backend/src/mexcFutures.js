@@ -3,35 +3,57 @@
 const MEXC_PROXY_BASE =
   process.env.MEXC_PROXY_BASE || "https://mexc-proxy.pch1211.workers.dev/proxy";
 
-async function fetchJson(url) {
-  const res = await fetch(url, {
-    headers: { accept: "application/json" }
-  });
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status} ${text.slice(0, 200)}`);
+async function fetchJsonWithRetry(url, { retries = 3, backoffMs = 800 } = {}) {
+  let lastText = "";
+
+  for (let i = 0; i <= retries; i++) {
+    const res = await fetch(url, {
+      headers: {
+        accept: "application/json"
+      }
+    });
+
+    // 정상
+    if (res.ok) {
+      return res.json();
+    }
+
+    // 에러 본문(HTML 차단 페이지 등)도 같이 수집
+    lastText = await res.text().catch(() => "");
+
+    // 429 / 5xx 는 재시도
+    if (res.status === 429 || res.status >= 500) {
+      if (i === retries) break;
+      await sleep(backoffMs * Math.pow(2, i)); // 800ms, 1600ms, 3200ms...
+      continue;
+    }
+
+    // 그 외는 즉시 실패
+    throw new Error(`HTTP ${res.status} ${lastText.slice(0, 200)}`);
   }
-  return res.json();
+
+  throw new Error(`HTTP 429/5xx ${lastText.slice(0, 200)}`);
 }
 
 /**
- * 전체 선물 계약 목록 (contract/detail)
- * Worker 예시: /proxy/api/v1/contract/detail
+ * 전체 선물 계약 목록
  */
 export async function fetchAllContracts() {
   const url = `${MEXC_PROXY_BASE}/api/v1/contract/detail`;
-  const j = await fetchJson(url);
+  const j = await fetchJsonWithRetry(url);
   return j?.data || [];
 }
 
 /**
- * 현재 fairPrice (contract/fair_price/{symbol})
- * Worker 예시: /proxy/api/v1/contract/fair_price/BTC_USDT
+ * 현재 fairPrice
  */
 export async function fetchMexcFairPrice(symbol) {
   const url = `${MEXC_PROXY_BASE}/api/v1/contract/fair_price/${encodeURIComponent(symbol)}`;
-  const j = await fetchJson(url);
+  const j = await fetchJsonWithRetry(url);
 
   const fair = Number(j?.data?.fairPrice ?? j?.data?.fair_price);
   if (!Number.isFinite(fair)) {
@@ -41,24 +63,34 @@ export async function fetchMexcFairPrice(symbol) {
 }
 
 /**
- * 일봉 종가 (contract/kline/{symbol})
- * 너 Worker에서 찍어본 구조가 이 형태였지:
- * /proxy/api/v1/contract/kline/BTC_USDT?interval=1d&limit=31
- *
- * 응답은 보통 data가 배열이고 각 요소에 close가 있음
+ * 일봉 종가 (중요: interval=Day1)
  */
 export async function fetchDailyCloses(symbol, limit = 31) {
   const url =
     `${MEXC_PROXY_BASE}/api/v1/contract/kline/${encodeURIComponent(symbol)}` +
-    `?interval=1d&limit=${Number(limit)}`;
+    `?interval=Day1&limit=${Number(limit)}`;
 
-  const j = await fetchJson(url);
+  const j = await fetchJsonWithRetry(url);
 
-  const arr = Array.isArray(j?.data) ? j.data : [];
-  const closes = arr.map((k) => Number(k?.close)).filter((v) => Number.isFinite(v));
-
-  if (closes.length < Math.min(15, Number(limit))) {
-    throw new Error(`not enough candles for ${symbol}: ${closes.length}`);
+  // (A) data가 배열인 형태: [{close:...}, ...]
+  if (Array.isArray(j?.data)) {
+    const closes = j.data
+      .map((k) => Number(k?.close))
+      .filter((v) => Number.isFinite(v));
+    if (closes.length < Math.min(15, Number(limit))) {
+      throw new Error(`not enough candles for ${symbol}: ${closes.length}`);
+    }
+    return closes;
   }
-  return closes;
+
+  // (B) data.close가 배열인 형태: { close:[...] }
+  if (j?.data?.close && Array.isArray(j.data.close)) {
+    const closes = j.data.close.map(Number).filter((v) => Number.isFinite(v));
+    if (closes.length < Math.min(15, Number(limit))) {
+      throw new Error(`not enough candles for ${symbol}: ${closes.length}`);
+    }
+    return closes;
+  }
+
+  throw new Error(`kline parse fail for ${symbol}`);
 }
