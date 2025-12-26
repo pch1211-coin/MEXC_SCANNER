@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import { runTop30Scan } from "./scanner.js";
 
 const app = express();
