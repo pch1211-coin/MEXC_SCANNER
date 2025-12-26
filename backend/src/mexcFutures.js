@@ -1,69 +1,77 @@
 // backend/src/mexcFutures.js
+// Node18+ (Render) 기준
 
-const MEXC_PROXY_BASE =
-  process.env.MEXC_PROXY_BASE || "https://mexc-proxy.pch1211.workers.dev/proxy";
+const DEFAULT_PROXY = "https://mexc-proxy.pch1211.workers.dev/proxy";
+const MEXC_PROXY_BASE = (process.env.MEXC_PROXY_BASE || DEFAULT_PROXY).replace(/\/$/, "");
 
-async function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+async function fetchJson(url) {
+  const res = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      // 일부 환경에서 차단 줄이기용
+      "user-agent": "Mozilla/5.0 (Render; mexc-scanner)",
+    },
+  });
 
-async function fetchJsonWithRetry(url, { retries = 3, backoffMs = 800 } = {}) {
-  let lastText = "";
+  const text = await res.text().catch(() => "");
 
-  for (let i = 0; i <= retries; i++) {
-    const res = await fetch(url, { headers: { accept: "application/json" } });
-
-    if (res.ok) return res.json();
-
-    lastText = await res.text().catch(() => "");
-
-    if (res.status === 429 || res.status >= 500) {
-      if (i === retries) break;
-      await sleep(backoffMs * Math.pow(2, i));
-      continue;
-    }
-
-    throw new Error(`HTTP ${res.status} ${lastText.slice(0, 200)}`);
+  // ✅ JSON이 아닌 HTML(429/403 페이지)도 그대로 로그에 남기고 에러 처리
+  if (!res.ok) {
+    console.error("[mexcFutures] HTTP FAIL", res.status, url, text.slice(0, 200));
+    throw new Error(`HTTP ${res.status}`);
   }
 
-  throw new Error(`HTTP 429/5xx ${lastText.slice(0, 200)}`);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    console.error("[mexcFutures] JSON PARSE FAIL", url, text.slice(0, 200));
+    throw new Error("Invalid JSON");
+  }
 }
 
+/**
+ * 전체 선물 계약 목록
+ * GET {proxy}/api/v1/contract/detail
+ */
 export async function fetchAllContracts() {
   const url = `${MEXC_PROXY_BASE}/api/v1/contract/detail`;
-  const j = await fetchJsonWithRetry(url);
-  return j?.data || [];
+  const j = await fetchJson(url);
+
+  // 너가 캡처한 응답 구조: { success:true, code:0, data:[...] }
+  if (j?.success !== true || !Array.isArray(j?.data)) {
+    throw new Error("contract/detail bad response");
+  }
+  return j.data;
 }
 
+/**
+ * fairPrice
+ * GET {proxy}/api/v1/contract/fair_price/{symbol}
+ */
 export async function fetchMexcFairPrice(symbol) {
   const url = `${MEXC_PROXY_BASE}/api/v1/contract/fair_price/${encodeURIComponent(symbol)}`;
-  const j = await fetchJsonWithRetry(url);
+  const j = await fetchJson(url);
 
   const fair = Number(j?.data?.fairPrice ?? j?.data?.fair_price);
-  if (!Number.isFinite(fair)) throw new Error(`fairPrice invalid for ${symbol}`);
+  if (!Number.isFinite(fair)) throw new Error(`fairPrice invalid: ${symbol}`);
   return fair;
 }
 
+/**
+ * 일봉 종가 31개
+ * GET {proxy}/api/v1/contract/kline/{symbol}?interval=1d&limit=31
+ */
 export async function fetchDailyCloses(symbol, limit = 31) {
   const url =
     `${MEXC_PROXY_BASE}/api/v1/contract/kline/${encodeURIComponent(symbol)}` +
-    `?interval=Day1&limit=${Number(limit)}`;
+    `?interval=1d&limit=${Number(limit)}`;
 
-  const j = await fetchJsonWithRetry(url);
+  const j = await fetchJson(url);
 
-  // 형태 A: data 배열
-  if (Array.isArray(j?.data)) {
-    const closes = j.data.map((k) => Number(k?.close)).filter((v) => Number.isFinite(v));
-    if (closes.length < Math.min(15, Number(limit))) throw new Error(`not enough candles for ${symbol}: ${closes.length}`);
-    return closes;
-  }
+  // 너가 올린 구조 기준: data가 배열, 각 요소 close 존재
+  const arr = Array.isArray(j?.data) ? j.data : [];
+  const closes = arr.map((x) => Number(x?.close)).filter((v) => Number.isFinite(v));
 
-  // 형태 B: data.close 배열
-  if (j?.data?.close && Array.isArray(j.data.close)) {
-    const closes = j.data.close.map(Number).filter((v) => Number.isFinite(v));
-    if (closes.length < Math.min(15, Number(limit))) throw new Error(`not enough candles for ${symbol}: ${closes.length}`);
-    return closes;
-  }
-
-  throw new Error(`kline parse fail for ${symbol}`);
+  if (closes.length < 15) throw new Error(`not enough candles: ${symbol}`);
+  return closes;
 }
