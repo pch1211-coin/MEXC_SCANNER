@@ -157,7 +157,10 @@ export default function Page() {
   async function load() {
     try {
       setLoading(true);
-      const r = await fetch(`${BACKEND}/api/top30`, { cache: "no-store" });
+      const r = await fetch(`${BACKEND_URL}/api/top30`, {
+  cache: "no-store",
+  headers: { "x-api-key": apiKey }
+});
       const j = await r.json();
       setMeta({ ok: !!j.ok, updated: j.updated || "", error: j.error || "" });
       setRows(Array.isArray(j.data) ? j.data : []);
