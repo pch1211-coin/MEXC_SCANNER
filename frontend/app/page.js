@@ -142,6 +142,10 @@ function Td({ children, style }) {
 }
 
 export default function Page() {
+  const { apiKey, role, save, logout } = useAuthKey();
+  if (!apiKey) {
+    return <LoginGate onSave={save} />;
+  }
   const BACKEND =
     process.env.NEXT_PUBLIC_BACKEND_URL ||
     "https://mexc-scanner-backend.onrender.com";
