@@ -1,77 +1,175 @@
 "use client";
-import { useEffect, useState } from "react";
 
-const BACKEND =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  "http://localhost:10000"; // 로컬 테스트용
+import { useEffect, useMemo, useState } from "react";
+
+const DEFAULT_REFRESH_MS = 5000;
+
+function fmt(n, digits = 6) {
+  if (n === null || n === undefined) return "";
+  const x = Number(n);
+  if (!Number.isFinite(x)) return String(n);
+  // 너무 긴 소수는 보기 좋게
+  return x.toFixed(digits).replace(/\.?0+$/, "");
+}
+
+function abs(n) {
+  const x = Number(n);
+  return Number.isFinite(x) ? Math.abs(x) : 0;
+}
 
 export default function Page() {
+  const BACKEND =
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    "https://mexc-scanner-backend.onrender.com";
+
   const [rows, setRows] = useState([]);
-  const [meta, setMeta] = useState({});
+  const [meta, setMeta] = useState({ ok: false, updated: "", error: "" });
+
+  // UI 상태
+  const [filterType, setFilterType] = useState("ALL"); // ALL | CONFIRM | NEAR
+  const [sortKey, setSortKey] = useState("RANK"); // RANK | ABS_DEV | UPDATED
+  const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
+  const [loading, setLoading] = useState(false);
 
   async function load() {
-    const r = await fetch(`${BACKEND}/api/top30`);
-    const j = await r.json();
-    setMeta({ updated: j.updated, interval: j.interval, ok: j.ok, error: j.error });
-    setRows(j.data || []);
+    try {
+      setLoading(true);
+      const r = await fetch(`${BACKEND}/api/top30`, { cache: "no-store" });
+      const j = await r.json();
+      setMeta({ ok: !!j.ok, updated: j.updated || "", error: j.error || "" });
+      setRows(Array.isArray(j.data) ? j.data : []);
+    } catch (e) {
+      setMeta({ ok: false, updated: "", error: String(e?.message || e) });
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 5000);
+    const t = setInterval(load, refreshMs);
     return () => clearInterval(t);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshMs]);
+
+  const filtered = useMemo(() => {
+    let out = [...rows];
+    if (filterType === "CONFIRM") out = out.filter((r) => r.type === "전환확정");
+    if (filterType === "NEAR") out = out.filter((r) => r.type === "전환근접");
+
+    if (sortKey === "ABS_DEV") {
+      out.sort((a, b) => abs(b.deviationPct) - abs(a.deviationPct));
+    } else if (sortKey === "UPDATED") {
+      out.sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+    } else {
+      out.sort((a, b) => Number(a.rank) - Number(b.rank));
+    }
+
+    return out;
+  }, [rows, filterType, sortKey]);
 
   return (
-    <div style={{ padding: 16, fontFamily: "sans-serif" }}>
-      <h2>MEXC FUTURES TURN_TOP30</h2>
-      <div style={{ marginBottom: 12 }}>
-        backend: <b>{BACKEND}</b>
-        <br />
-        interval: <b>{meta.interval}</b> / updated: <b>{meta.updated}</b>
-        <br />
-        status: <b>{String(meta.ok)}</b>
-        {meta.error ? <div style={{ color: "red" }}>error: {meta.error}</div> : null}
+    <div style={{ padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0 }}>MEXC Futures DASH</h2>
+        <span style={{ fontSize: 12, opacity: 0.75 }}>
+          backend: {BACKEND}
+        </span>
       </div>
 
-      <div style={{ overflowX: "auto" }}>
-        <table border="1" cellPadding="8" style={{ borderCollapse: "collapse", width: "100%" }}>
+      <div style={{ marginTop: 8, fontSize: 13 }}>
+        상태:{" "}
+        <b style={{ color: meta.ok ? "green" : "crimson" }}>
+          {meta.ok ? "OK" : "ERROR"}
+        </b>
+        {loading ? <span style={{ marginLeft: 8, opacity: 0.7 }}>(loading...)</span> : null}
+        <div style={{ marginTop: 4, opacity: 0.8 }}>
+          updated: <b>{meta.updated || "-"}</b>
+          {meta.error ? (
+            <div style={{ marginTop: 6, color: "crimson" }}>
+              error: {meta.error}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* 컨트롤 */}
+      <div
+        style={{
+          marginTop: 14,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gap: 10,
+          alignItems: "end"
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>필터</div>
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            style={{ width: "100%", padding: 10, borderRadius: 10 }}
+          >
+            <option value="ALL">전체</option>
+            <option value="CONFIRM">전환확정만</option>
+            <option value="NEAR">전환근접만</option>
+          </select>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>정렬</div>
+          <select
+            value={sortKey}
+            onChange={(e) => setSortKey(e.target.value)}
+            style={{ width: "100%", padding: 10, borderRadius: 10 }}
+          >
+            <option value="RANK">Rank 순</option>
+            <option value="ABS_DEV">Deviation(절대값) 큰 순</option>
+            <option value="UPDATED">최신 갱신 순</option>
+          </select>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>새로고침(초)</div>
+          <select
+            value={refreshMs}
+            onChange={(e) => setRefreshMs(Number(e.target.value))}
+            style={{ width: "100%", padding: 10, borderRadius: 10 }}
+          >
+            <option value={3000}>3초</option>
+            <option value={5000}>5초</option>
+            <option value={10000}>10초</option>
+            <option value={30000}>30초</option>
+          </select>
+        </div>
+
+        <button
+          onClick={load}
+          style={{
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid rgba(0,0,0,0.15)",
+            background: "white",
+            cursor: "pointer",
+            fontWeight: 700
+          }}
+        >
+          지금 갱신
+        </button>
+      </div>
+
+      {/* 테이블 */}
+      <div style={{ marginTop: 14, overflowX: "auto", border: "1px solid rgba(0,0,0,0.1)", borderRadius: 14 }}>
+        <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 920 }}>
           <thead>
-            <tr>
-              <th>Rank</th>
-              <th>Symbol</th>
-              <th>Direction</th>
-              <th>Type</th>
-              <th>Band(%)</th>
-              <th>Price</th>
-              <th>MA30</th>
-              <th>RSI14</th>
-              <th>Dev(%)</th>
-              <th>Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.symbol}>
-                <td>{r.rank}</td>
-                <td>{r.symbol}</td>
-                <td>{r.direction}</td>
-                <td>{r.type}</td>
-                <td>{Number(r.bandPct).toFixed(2)}</td>
-                <td>{r.price}</td>
-                <td>{r.ma30}</td>
-                <td>{Number(r.rsi14).toFixed(2)}</td>
-                <td>{Number(r.deviationPct).toFixed(4)}</td>
-                <td>{r.updated}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <p style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-        * 이 화면은 “동작 확인용 기본 계산” 버전입니다. 원본 구글시트 계산식을 주면 그대로 맞춰서 교체 가능합니다.
-      </p>
-    </div>
-  );
-}
+            <tr style={{ background: "rgba(0,0,0,0.04)" }}>
+              <Th>Rank</Th>
+              <Th>Symbol</Th>
+              <Th>Direction</Th>
+              <Th>Type</Th>
+              <Th>Band(%)</Th>
+              <Th>Price</Th>
+              <Th>MA30</Th>
+              <Th>RSI14</Th>
+              <Th>Dev(%)</
