@@ -94,28 +94,26 @@ function LoginGate({ onSave }) {
           }}
         />
 
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            onClick={() => onSave(k.trim(), r)}
-            disabled={!k.trim()}
-            style={{
-              flex: 1,
-              padding: 10,
-              borderRadius: 10,
-              fontWeight: 700,
-              cursor: k.trim() ? "pointer" : "not-allowed"
-            }}
-          >
-            로그인
-          </button>
-        </div>
+        <button
+          onClick={() => onSave(k.trim(), r)}
+          disabled={!k.trim()}
+          style={{
+            width: "100%",
+            padding: 10,
+            borderRadius: 10,
+            fontWeight: 700,
+            cursor: k.trim() ? "pointer" : "not-allowed"
+          }}
+        >
+          로그인
+        </button>
       </div>
     </div>
   );
 }
 
 /** =========================
- *  UI Helpers (기존 유지)
+ *  UI Helpers
  *  ========================= */
 const DEFAULT_REFRESH_MS = 5000;
 
@@ -169,10 +167,7 @@ function Td({ children, style }) {
  *  Page
  *  ========================= */
 export default function Page() {
-  /**
-   * ✅ 중요: Hook들은 "조건문 return"보다 항상 위에 있어야 함
-   * (이게 관리자 로그인 후 크래시의 원인이었음)
-   */
+  // ✅ Hook은 무조건 최상단 (항상 같은 순서)
   const { apiKey, role, save, logout } = useAuthKey();
 
   const BACKEND =
@@ -187,11 +182,6 @@ export default function Page() {
   const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
   const [loading, setLoading] = useState(false);
 
-  // ✅ 로그인 안되어 있으면 여기서만 "return" (Hook 뒤!)
-  if (!apiKey) {
-    return <LoginGate onSave={save} />;
-  }
-
   async function load() {
     try {
       setLoading(true);
@@ -201,7 +191,6 @@ export default function Page() {
         headers: { "x-api-key": apiKey }
       });
 
-      // ✅ 응답이 JSON이 아닐 때도 에러를 화면에 표시하게 방어
       if (!r.ok) {
         const t = await r.text().catch(() => "");
         throw new Error(`HTTP ${r.status} ${t.slice(0, 200)}`);
@@ -218,7 +207,11 @@ export default function Page() {
     }
   }
 
+  // ✅ useEffect도 "return" 보다 위에 있어야 함
   useEffect(() => {
+    // ✅ 로그인 전에는 fetch 안 함 (이거 중요)
+    if (!apiKey) return;
+
     load();
     const t = setInterval(load, refreshMs);
     return () => clearInterval(t);
@@ -242,6 +235,11 @@ export default function Page() {
     return out;
   }, [rows, filterType, sortKey]);
 
+  // ✅ Hook/useEffect/useMemo 전부 끝난 뒤에만 조건부 return
+  if (!apiKey) {
+    return <LoginGate onSave={save} />;
+  }
+
   return (
     <div
       style={{
@@ -252,7 +250,6 @@ export default function Page() {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0 }}>MEXC Futures DASH</h2>
         <span style={{ fontSize: 12, opacity: 0.75 }}>backend: {BACKEND}</span>
-
         <span style={{ fontSize: 12, opacity: 0.75 }}>role: {role}</span>
 
         <button
