@@ -6,27 +6,50 @@ const LS_KEY = "MEXC_SCANNER_API_KEY";
 const LS_ROLE = "MEXC_SCANNER_ROLE"; // "admin" | "view"
 const DEFAULT_REFRESH_MS = 5000;
 
+function safeGetLS(key) {
+  try {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+function safeSetLS(key, val) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(key, val);
+  } catch {}
+}
+function safeDelLS(key) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.removeItem(key);
+  } catch {}
+}
+
 function useAuthKey() {
   const [apiKey, setApiKey] = useState("");
   const [role, setRole] = useState("view");
 
   useEffect(() => {
-    const k = localStorage.getItem(LS_KEY) || "";
-    const r = localStorage.getItem(LS_ROLE) || "view";
+    const k = safeGetLS(LS_KEY);
+    const r = safeGetLS(LS_ROLE) || "view";
     setApiKey(k);
     setRole(r);
   }, []);
 
   const save = (k, r) => {
-    localStorage.setItem(LS_KEY, k);
-    localStorage.setItem(LS_ROLE, r);
-    setApiKey(k);
-    setRole(r);
+    const kk = String(k || "").trim();
+    const rr = r === "admin" ? "admin" : "view";
+    safeSetLS(LS_KEY, kk);
+    safeSetLS(LS_ROLE, rr);
+    setApiKey(kk);
+    setRole(rr);
   };
 
   const logout = () => {
-    localStorage.removeItem(LS_KEY);
-    localStorage.removeItem(LS_ROLE);
+    safeDelLS(LS_KEY);
+    safeDelLS(LS_ROLE);
     setApiKey("");
     setRole("view");
   };
@@ -39,14 +62,28 @@ function LoginGate({ onSave }) {
   const [r, setR] = useState("view");
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
-      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999
-    }}>
-      <div style={{
-        width: 360, maxWidth: "92vw", background: "#111", color: "#fff",
-        borderRadius: 12, padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
-      }}>
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9999,
+      }}
+    >
+      <div
+        style={{
+          width: 360,
+          maxWidth: "92vw",
+          background: "#111",
+          color: "#fff",
+          borderRadius: 12,
+          padding: 16,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
+        }}
+      >
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>
           MEXC Scanner 로그인
         </div>
@@ -55,8 +92,11 @@ function LoginGate({ onSave }) {
           관리자/읽기전용 선택 후 비밀번호(API Key)를 입력하세요.
         </div>
 
-        <select value={r} onChange={(e) => setR(e.target.value)}
-          style={{ width: "100%", padding: 10, borderRadius: 10, marginBottom: 10 }}>
+        <select
+          value={r}
+          onChange={(e) => setR(e.target.value)}
+          style={{ width: "100%", padding: 10, borderRadius: 10, marginBottom: 10 }}
+        >
           <option value="view">읽기 전용</option>
           <option value="admin">관리자</option>
         </select>
@@ -71,7 +111,13 @@ function LoginGate({ onSave }) {
         <button
           onClick={() => onSave(k.trim(), r)}
           disabled={!k.trim()}
-          style={{ width: "100%", padding: 10, borderRadius: 10, fontWeight: 700 }}
+          style={{
+            width: "100%",
+            padding: 10,
+            borderRadius: 10,
+            fontWeight: 700,
+            cursor: k.trim() ? "pointer" : "not-allowed",
+          }}
         >
           로그인
         </button>
@@ -86,7 +132,6 @@ function fmt(n, digits = 6) {
   if (!Number.isFinite(x)) return String(n);
   return x.toFixed(digits).replace(/\.?0+$/, "");
 }
-
 function absVal(n) {
   const x = Number(n);
   return Number.isFinite(x) ? Math.abs(x) : 0;
@@ -94,36 +139,42 @@ function absVal(n) {
 
 function Th({ children }) {
   return (
-    <th style={{
-      textAlign: "left",
-      padding: "10px 10px",
-      fontSize: 12,
-      opacity: 0.85,
-      borderBottom: "1px solid rgba(0,0,0,0.08)",
-      position: "sticky",
-      top: 0,
-      background: "rgba(0,0,0,0.04)"
-    }}>
+    <th
+      style={{
+        textAlign: "left",
+        padding: "10px 10px",
+        fontSize: 12,
+        opacity: 0.85,
+        borderBottom: "1px solid rgba(0,0,0,0.08)",
+        position: "sticky",
+        top: 0,
+        background: "rgba(0,0,0,0.04)",
+      }}
+    >
       {children}
     </th>
   );
 }
-
 function Td({ children, style }) {
   return (
-    <td style={{
-      padding: "10px 10px",
-      borderBottom: "1px solid rgba(0,0,0,0.06)",
-      fontSize: 13,
-      ...style
-    }}>
+    <td
+      style={{
+        padding: "10px 10px",
+        borderBottom: "1px solid rgba(0,0,0,0.06)",
+        fontSize: 13,
+        ...style,
+      }}
+    >
       {children}
     </td>
   );
 }
 
 export default function Page() {
-  // ✅ Hook은 반드시 조건 return보다 먼저
+  // ✅ 중요: “마운트 완료” 전에는 localStorage 기반 UI를 렌더하지 않음
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const { apiKey, role, save, logout } = useAuthKey();
 
   const BACKEND =
@@ -132,11 +183,16 @@ export default function Page() {
 
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState({ ok: false, updated: "", error: "" });
+
   const [filterType, setFilterType] = useState("ALL"); // ALL | CONFIRM | NEAR
-  const [sortKey, setSortKey] = useState("UPDATED");   // 기본: 최신신호 위
+  const [sortKey, setSortKey] = useState("UPDATED"); // UPDATED | RANK | ABS_DEV
   const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
   const [loading, setLoading] = useState(false);
 
+  // ✅ 마운트 전에는 빈 화면(하이드레이션 충돌 방지)
+  if (!mounted) return null;
+
+  // ✅ 마운트 후, 키 없으면 로그인 게이트
   if (!apiKey) return <LoginGate onSave={save} />;
 
   async function load() {
@@ -145,13 +201,17 @@ export default function Page() {
 
       const r = await fetch(`${BACKEND}/api/top30`, {
         cache: "no-store",
-        headers: { "x-api-key": apiKey }
+        headers: { "x-api-key": apiKey },
       });
 
-      const j = await r.json().catch(async () => ({
-        ok: false,
-        error: `HTTP ${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}`
-      }));
+      // JSON이 아니면(HTML 에러 등) 텍스트로 처리
+      const text = await r.text();
+      let j;
+      try {
+        j = JSON.parse(text);
+      } catch {
+        j = { ok: false, error: `HTTP ${r.status} ${text.slice(0, 200)}` };
+      }
 
       setMeta({ ok: !!j.ok, updated: j.updated || "", error: j.error || "" });
       setRows(Array.isArray(j.data) ? j.data : []);
@@ -168,7 +228,7 @@ export default function Page() {
     const t = setInterval(load, refreshMs);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshMs]);
+  }, [refreshMs, apiKey, BACKEND]);
 
   const filtered = useMemo(() => {
     let out = [...rows];
@@ -206,19 +266,19 @@ export default function Page() {
         {loading ? <span style={{ marginLeft: 8, opacity: 0.7 }}>(loading...)</span> : null}
         <div style={{ marginTop: 4, opacity: 0.8 }}>
           updated: <b>{meta.updated || "-"}</b>
-          {meta.error ? (
-            <div style={{ marginTop: 6, color: "crimson" }}>error: {meta.error}</div>
-          ) : null}
+          {meta.error ? <div style={{ marginTop: 6, color: "crimson" }}>error: {meta.error}</div> : null}
         </div>
       </div>
 
-      <div style={{
-        marginTop: 14,
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-        gap: 10,
-        alignItems: "end"
-      }}>
+      <div
+        style={{
+          marginTop: 14,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gap: 10,
+          alignItems: "end",
+        }}
+      >
         <div>
           <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>필터</div>
           <select value={filterType} onChange={(e) => setFilterType(e.target.value)}
@@ -250,20 +310,22 @@ export default function Page() {
           </select>
         </div>
 
-        <button onClick={load} style={{
-          padding: 12, borderRadius: 12, border: "1px solid rgba(0,0,0,0.15)",
-          background: "white", cursor: "pointer", fontWeight: 700
-        }}>
+        <button
+          onClick={load}
+          style={{
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid rgba(0,0,0,0.15)",
+            background: "white",
+            cursor: "pointer",
+            fontWeight: 700,
+          }}
+        >
           지금 갱신
         </button>
       </div>
 
-      <div style={{
-        marginTop: 14,
-        overflowX: "auto",
-        border: "1px solid rgba(0,0,0,0.1)",
-        borderRadius: 14
-      }}>
+      <div style={{ marginTop: 14, overflowX: "auto", border: "1px solid rgba(0,0,0,0.1)", borderRadius: 14 }}>
         <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 920 }}>
           <thead>
             <tr>
@@ -279,12 +341,7 @@ export default function Page() {
                 const type = r.type || "";
                 const isConfirm = type === "전환확정";
                 const isNear = type === "전환근접";
-
-                const bg = isConfirm
-                  ? "rgba(255,77,77,0.25)"
-                  : isNear
-                  ? "rgba(255,242,204,0.9)"
-                  : "transparent";
+                const bg = isConfirm ? "rgba(255,77,77,0.25)" : isNear ? "rgba(255,242,204,0.9)" : "transparent";
 
                 return (
                   <tr key={r.symbol} style={{ background: bg }}>
