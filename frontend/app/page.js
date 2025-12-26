@@ -35,19 +35,30 @@ function useAuthKey() {
 function LoginGate({ onSave }) {
   const [k, setK] = useState("");
   const [r, setR] = useState("view");
-  const [show, setShow] = useState(true);
-
-  if (!show) return null;
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
-      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999
-    }}>
-      <div style={{
-        width: 360, maxWidth: "92vw", background: "#111", color: "#fff",
-        borderRadius: 12, padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
-      }}>
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9999
+      }}
+    >
+      <div
+        style={{
+          width: 360,
+          maxWidth: "92vw",
+          background: "#111",
+          color: "#fff",
+          borderRadius: 12,
+          padding: 16,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
+        }}
+      >
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>
           MEXC Scanner 로그인
         </div>
@@ -57,8 +68,11 @@ function LoginGate({ onSave }) {
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <select value={r} onChange={(e) => setR(e.target.value)}
-            style={{ flex: 1, padding: 10, borderRadius: 10 }}>
+          <select
+            value={r}
+            onChange={(e) => setR(e.target.value)}
+            style={{ flex: 1, padding: 10, borderRadius: 10 }}
+          >
             <option value="view">읽기 전용</option>
             <option value="admin">관리자</option>
           </select>
@@ -73,25 +87,17 @@ function LoginGate({ onSave }) {
 
         <div style={{ display: "flex", gap: 8 }}>
           <button
-            onClick={() => { onSave(k.trim(), r); setShow(false); }}
+            onClick={() => onSave(k.trim(), r)}
             disabled={!k.trim()}
             style={{ flex: 1, padding: 10, borderRadius: 10, fontWeight: 700 }}
           >
             로그인
-          </button>
-          <button
-            onClick={() => setShow(false)}
-            style={{ padding: 10, borderRadius: 10 }}
-          >
-            닫기
           </button>
         </div>
       </div>
     </div>
   );
 }
-
-import { useEffect, useMemo, useState } from "react";
 
 const DEFAULT_REFRESH_MS = 5000;
 
@@ -143,9 +149,11 @@ function Td({ children, style }) {
 
 export default function Page() {
   const { apiKey, role, save, logout } = useAuthKey();
+
   if (!apiKey) {
     return <LoginGate onSave={save} />;
   }
+
   const BACKEND =
     process.env.NEXT_PUBLIC_BACKEND_URL ||
     "https://mexc-scanner-backend.onrender.com";
@@ -161,10 +169,12 @@ export default function Page() {
   async function load() {
     try {
       setLoading(true);
-      const r = await fetch(`${BACKEND_URL}/api/top30`, {
-  cache: "no-store",
-  headers: { "x-api-key": apiKey }
-});
+
+      const r = await fetch(`${BACKEND}/api/top30`, {
+        cache: "no-store",
+        headers: { "x-api-key": apiKey }
+      });
+
       const j = await r.json();
       setMeta({ ok: !!j.ok, updated: j.updated || "", error: j.error || "" });
       setRows(Array.isArray(j.data) ? j.data : []);
@@ -210,6 +220,10 @@ export default function Page() {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0 }}>MEXC Futures DASH</h2>
         <span style={{ fontSize: 12, opacity: 0.75 }}>backend: {BACKEND}</span>
+        <span style={{ fontSize: 12, opacity: 0.75 }}>role: {role}</span>
+        <button onClick={logout} style={{ padding: "6px 10px", borderRadius: 10 }}>
+          로그아웃
+        </button>
       </div>
 
       <div style={{ marginTop: 8, fontSize: 13 }}>
@@ -226,7 +240,6 @@ export default function Page() {
         </div>
       </div>
 
-      {/* 컨트롤 */}
       <div
         style={{
           marginTop: 14,
@@ -291,7 +304,6 @@ export default function Page() {
         </button>
       </div>
 
-      {/* 테이블 */}
       <div
         style={{
           marginTop: 14,
