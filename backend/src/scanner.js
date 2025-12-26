@@ -8,7 +8,7 @@ import { apiToUiSymbol } from "./symbol.js";
 const TOP_N = 30;
 const TREND_BAND_PCT = 0.3;
 const TURN_NEAR_PCT = 0.15;
-const USE_RSI_FILTER = true;
+const USE_RSI_FILTER = false;
 const RSI_THRESHOLD = 50;
 
 /**
