@@ -148,11 +148,23 @@ function Td({ children, style }) {
 }
 
 export default function Page() {
+  // 🔹 모든 Hook은 무조건 최상단
   const { apiKey, role, save, logout } = useAuthKey();
 
+  const [rows, setRows] = useState([]);
+  const [meta, setMeta] = useState({ ok: false, updated: "", error: "" });
+  const [filterType, setFilterType] = useState("ALL");
+  const [sortKey, setSortKey] = useState("RANK");
+  const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
+  const [loading, setLoading] = useState(false);
+
+  // 🔹 Hook 다음에 조건부 return
   if (!apiKey) {
     return <LoginGate onSave={save} />;
   }
+
+  // 이하 기존 코드 그대로
+}
 
   const BACKEND =
     process.env.NEXT_PUBLIC_BACKEND_URL ||
