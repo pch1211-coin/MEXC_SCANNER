@@ -4,6 +4,7 @@ import { runTop30Scan } from "./scanner.js";
 
 const app = express();
 
+app.use(cors()); // ⭐ 이 한 줄이 핵심
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 app.get("/api/top30", async (req, res) => {
