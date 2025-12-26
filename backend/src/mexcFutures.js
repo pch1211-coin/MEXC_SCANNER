@@ -12,7 +12,6 @@ async function fetchJsonWithRetry(url, { retries = 3, backoffMs = 800 } = {}) {
     try {
       const res = await fetch(url, { headers: { accept: "application/json" } });
 
-      // 간단 레이트리밋/서버에러 대응
       if (res.status === 429 || res.status >= 500) {
         const text = await res.text().catch(() => "");
         throw new Error(`HTTP ${res.status} ${text}`.slice(0, 200));
@@ -35,55 +34,44 @@ async function fetchJsonWithRetry(url, { retries = 3, backoffMs = 800 } = {}) {
   throw lastErr ?? new Error("fetchJson failed");
 }
 
-/**
- * 선물 계약(심볼) 목록
- */
+/** 전체 선물 계약 목록 */
 export async function fetchAllContracts() {
   const url = `${BASE}/api/v1/contract/detail`;
   const json = await fetchJsonWithRetry(url, { retries: 3, backoffMs: 700 });
   return json?.data ?? [];
 }
 
-/**
- * 선물 캔들
- * GET /api/v1/contract/kline/{symbol}?interval=Min15&limit=200
- */
-export async function fetchKlines({ apiSymbol, interval, limit }) {
-  const u = new URL(`${BASE}/api/v1/contract/kline/${apiSymbol}`);
-  u.searchParams.set("interval", interval);
-  u.searchParams.set("limit", String(limit));
+/** ticker에서 fairPrice 가져오기 (구글시트 fetchMexcTicker_ 동일) */
+export async function fetchMexcFairPrice(apiSymbol) {
+  const url = `${BASE}/api/v1/contract/ticker?symbol=${encodeURIComponent(apiSymbol)}`;
+  const json = await fetchJsonWithRetry(url, { retries: 3, backoffMs: 700 });
 
-  const json = await fetchJsonWithRetry(u.toString(), { retries: 3, backoffMs: 900 });
-  const data = json?.data;
-
-  // Case A: data = [[t,o,h,l,c,v], ...]
-  if (Array.isArray(data) && Array.isArray(data[0])) {
-    return data.map((arr) => ({
-      time: Number(arr[0]),
-      open: Number(arr[1]),
-      high: Number(arr[2]),
-      low: Number(arr[3]),
-      close: Number(arr[4]),
-      vol: Number(arr[5] ?? 0),
-    }));
+  if (!json || json.success !== true || !json.data) {
+    throw new Error("API fail: ticker");
   }
 
-  // Case B: data = { time:[], open:[], ... }
-  if (data && Array.isArray(data.time)) {
-    const n = data.time.length;
-    const out = [];
-    for (let i = 0; i < n; i++) {
-      out.push({
-        time: Number(data.time[i]),
-        open: Number(data.open?.[i]),
-        high: Number(data.high?.[i]),
-        low: Number(data.low?.[i]),
-        close: Number(data.close?.[i]),
-        vol: Number(data.vol?.[i] ?? data.volume?.[i] ?? 0),
-      });
-    }
-    return out;
+  const last = Number(json.data.lastPrice);
+  const fair = Number(json.data.fairPrice ?? json.data.fair_price ?? last);
+  if (!Number.isFinite(fair)) throw new Error("fairPrice invalid");
+  return fair;
+}
+
+/** Day1 kline에서 close 배열 가져오기 (구글시트 fetchDailyCloses_ 동일) */
+export async function fetchDailyCloses(apiSymbol, needCount) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const startSec = nowSec - 120 * 24 * 60 * 60;
+
+  const url =
+    `${BASE}/api/v1/contract/kline/${encodeURIComponent(apiSymbol)}` +
+    `?interval=Day1&start=${startSec}&end=${nowSec}`;
+
+  const json = await fetchJsonWithRetry(url, { retries: 3, backoffMs: 900 });
+
+  if (!json || json.success !== true || !json.data || !json.data.close) {
+    throw new Error("kline fail");
   }
 
-  return [];
+  const closes = json.data.close.map(Number).filter((v) => Number.isFinite(v));
+  if (closes.length < needCount) throw new Error("not enough candles");
+  return closes;
 }
