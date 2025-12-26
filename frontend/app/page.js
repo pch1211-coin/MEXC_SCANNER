@@ -1,4 +1,95 @@
 "use client";
+import { useEffect, useMemo, useState } from "react";
+
+const LS_KEY = "MEXC_SCANNER_API_KEY";
+const LS_ROLE = "MEXC_SCANNER_ROLE"; // "admin" | "view"
+
+function useAuthKey() {
+  const [apiKey, setApiKey] = useState("");
+  const [role, setRole] = useState("view");
+
+  useEffect(() => {
+    const k = localStorage.getItem(LS_KEY) || "";
+    const r = localStorage.getItem(LS_ROLE) || "view";
+    setApiKey(k);
+    setRole(r);
+  }, []);
+
+  const save = (k, r) => {
+    localStorage.setItem(LS_KEY, k);
+    localStorage.setItem(LS_ROLE, r);
+    setApiKey(k);
+    setRole(r);
+  };
+
+  const logout = () => {
+    localStorage.removeItem(LS_KEY);
+    localStorage.removeItem(LS_ROLE);
+    setApiKey("");
+    setRole("view");
+  };
+
+  return { apiKey, role, save, logout };
+}
+
+function LoginGate({ onSave }) {
+  const [k, setK] = useState("");
+  const [r, setR] = useState("view");
+  const [show, setShow] = useState(true);
+
+  if (!show) return null;
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999
+    }}>
+      <div style={{
+        width: 360, maxWidth: "92vw", background: "#111", color: "#fff",
+        borderRadius: 12, padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
+      }}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>
+          MEXC Scanner 로그인
+        </div>
+
+        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
+          관리자/읽기전용 중 선택 후 비밀번호(API Key)를 입력하세요.
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <select value={r} onChange={(e) => setR(e.target.value)}
+            style={{ flex: 1, padding: 10, borderRadius: 10 }}>
+            <option value="view">읽기 전용</option>
+            <option value="admin">관리자</option>
+          </select>
+        </div>
+
+        <input
+          value={k}
+          onChange={(e) => setK(e.target.value)}
+          placeholder="비밀번호(API Key) 입력"
+          style={{ width: "100%", padding: 10, borderRadius: 10, marginBottom: 10 }}
+        />
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={() => { onSave(k.trim(), r); setShow(false); }}
+            disabled={!k.trim()}
+            style={{ flex: 1, padding: 10, borderRadius: 10, fontWeight: 700 }}
+          >
+            로그인
+          </button>
+          <button
+            onClick={() => setShow(false)}
+            style={{ padding: 10, borderRadius: 10 }}
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 import { useEffect, useMemo, useState } from "react";
 
