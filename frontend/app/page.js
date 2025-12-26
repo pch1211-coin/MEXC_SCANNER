@@ -1,6 +1,10 @@
 "use client";
+
 import { useEffect, useMemo, useState } from "react";
 
+/** =========================
+ *  Login (LocalStorage)
+ *  ========================= */
 const LS_KEY = "MEXC_SCANNER_API_KEY";
 const LS_ROLE = "MEXC_SCANNER_ROLE"; // "admin" | "view"
 
@@ -82,14 +86,25 @@ function LoginGate({ onSave }) {
           value={k}
           onChange={(e) => setK(e.target.value)}
           placeholder="비밀번호(API Key) 입력"
-          style={{ width: "100%", padding: 10, borderRadius: 10, marginBottom: 10 }}
+          style={{
+            width: "100%",
+            padding: 10,
+            borderRadius: 10,
+            marginBottom: 10
+          }}
         />
 
         <div style={{ display: "flex", gap: 8 }}>
           <button
             onClick={() => onSave(k.trim(), r)}
             disabled={!k.trim()}
-            style={{ flex: 1, padding: 10, borderRadius: 10, fontWeight: 700 }}
+            style={{
+              flex: 1,
+              padding: 10,
+              borderRadius: 10,
+              fontWeight: 700,
+              cursor: k.trim() ? "pointer" : "not-allowed"
+            }}
           >
             로그인
           </button>
@@ -99,6 +114,9 @@ function LoginGate({ onSave }) {
   );
 }
 
+/** =========================
+ *  UI Helpers (기존 유지)
+ *  ========================= */
 const DEFAULT_REFRESH_MS = 5000;
 
 function fmt(n, digits = 6) {
@@ -147,24 +165,15 @@ function Td({ children, style }) {
   );
 }
 
+/** =========================
+ *  Page
+ *  ========================= */
 export default function Page() {
-  // 🔹 모든 Hook은 무조건 최상단
+  /**
+   * ✅ 중요: Hook들은 "조건문 return"보다 항상 위에 있어야 함
+   * (이게 관리자 로그인 후 크래시의 원인이었음)
+   */
   const { apiKey, role, save, logout } = useAuthKey();
-
-  const [rows, setRows] = useState([]);
-  const [meta, setMeta] = useState({ ok: false, updated: "", error: "" });
-  const [filterType, setFilterType] = useState("ALL");
-  const [sortKey, setSortKey] = useState("RANK");
-  const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
-  const [loading, setLoading] = useState(false);
-
-  // 🔹 Hook 다음에 조건부 return
-  if (!apiKey) {
-    return <LoginGate onSave={save} />;
-  }
-
-  // 이하 기존 코드 그대로
-}
 
   const BACKEND =
     process.env.NEXT_PUBLIC_BACKEND_URL ||
@@ -178,6 +187,11 @@ export default function Page() {
   const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
   const [loading, setLoading] = useState(false);
 
+  // ✅ 로그인 안되어 있으면 여기서만 "return" (Hook 뒤!)
+  if (!apiKey) {
+    return <LoginGate onSave={save} />;
+  }
+
   async function load() {
     try {
       setLoading(true);
@@ -186,6 +200,12 @@ export default function Page() {
         cache: "no-store",
         headers: { "x-api-key": apiKey }
       });
+
+      // ✅ 응답이 JSON이 아닐 때도 에러를 화면에 표시하게 방어
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status} ${t.slice(0, 200)}`);
+      }
 
       const j = await r.json();
       setMeta({ ok: !!j.ok, updated: j.updated || "", error: j.error || "" });
@@ -203,7 +223,7 @@ export default function Page() {
     const t = setInterval(load, refreshMs);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshMs]);
+  }, [refreshMs, apiKey, BACKEND]);
 
   const filtered = useMemo(() => {
     let out = [...rows];
@@ -232,8 +252,20 @@ export default function Page() {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0 }}>MEXC Futures DASH</h2>
         <span style={{ fontSize: 12, opacity: 0.75 }}>backend: {BACKEND}</span>
+
         <span style={{ fontSize: 12, opacity: 0.75 }}>role: {role}</span>
-        <button onClick={logout} style={{ padding: "6px 10px", borderRadius: 10 }}>
+
+        <button
+          onClick={logout}
+          style={{
+            padding: "6px 10px",
+            borderRadius: 10,
+            border: "1px solid rgba(0,0,0,0.15)",
+            background: "white",
+            cursor: "pointer",
+            fontWeight: 700
+          }}
+        >
           로그아웃
         </button>
       </div>
@@ -252,6 +284,7 @@ export default function Page() {
         </div>
       </div>
 
+      {/* 컨트롤 */}
       <div
         style={{
           marginTop: 14,
@@ -316,6 +349,7 @@ export default function Page() {
         </button>
       </div>
 
+      {/* 테이블 */}
       <div
         style={{
           marginTop: 14,
