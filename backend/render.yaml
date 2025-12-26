@@ -1,1 +1,25 @@
-
+services:
+  - type: web
+    name: mexc-scanner-backend
+    env: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: INTERVAL
+        value: "Min15"
+      - key: LIMIT
+        value: "200"
+      - key: MAX_SYMBOLS
+        value: "250"
+      - key: CONCURRENCY
+        value: "6"
+      - key: RSI50_FILTER
+        value: "true"
+      - key: TREND_BAND_PCT
+        value: "0.3"
+      - key: ONLY_USDT
+        value: "true"
+      - key: SORT_BY
+        value: "band"  # band | absDev
