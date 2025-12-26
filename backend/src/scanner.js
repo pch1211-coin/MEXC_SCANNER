@@ -3,14 +3,32 @@ import { fetchAllContracts, fetchMexcFairPrice, fetchDailyCloses } from "./mexcF
 import { apiToUiSymbol } from "./symbol.js";
 
 /**
- * === 구글시트 상수(기본값) ===
- * - 계산 방식은 동일, 값만 ENV/쿼리로 바꿀 수 있게 cfg로 받음
+ * === 구글시트 계산방식 유지 ===
+ * - MA30, RSI14, Band, Near, Score 계산은 동일
+ * - "표시 유지시간(HOLD)"만 추가
  */
 const TOP_N = 30;
 
 // 상태 저장(구글시트 SYM_TREND|sym 역할)
-// Render 재시작/슬립 시 초기화될 수 있음(계산방식 동일)
 const trendStore = new Map(); // uiSymbol -> "UP" | "DOWN" | "NEUTRAL" | "NONE"
+
+/**
+ * ✅ 표시 유지(요청사항)
+ * - CONFIRM: 3분
+ * - NEAR: 1분
+ * - 새 신호(처음 뜸 / 타입이 바뀜)는 맨 위로
+ */
+const HOLD_CONFIRM_MS = 3 * 60 * 1000; // 3분
+const HOLD_NEAR_MS = 1 * 60 * 1000;    // 1분
+
+// uiSymbol -> { snap, seenAt, expiresAt }
+const holdStore = new Map();
+
+function ttlMsByType(type) {
+  if (type === "CONFIRM") return HOLD_CONFIRM_MS;
+  if (type === "NEAR") return HOLD_NEAR_MS;
+  return 0;
+}
 
 /** === 구글시트 calcMA_ 동일 === */
 function calcMA_(closes, period) {
@@ -18,7 +36,7 @@ function calcMA_(closes, period) {
   return arr.reduce((a, b) => a + b, 0) / period;
 }
 
-/** === 구글시트 calcRSI_ 동일 (최근 15개로 평균) === */
+/** === 구글시트 calcRSI_ 동일(최근 15개 평균) === */
 function calcRSI_(closes, period = 14) {
   const arr = closes.slice(-(period + 1));
   if (arr.length < period + 1) return NaN;
@@ -94,7 +112,58 @@ function nowIso() {
 }
 
 /**
- * === 핵심: 심볼 하나 계산(구글시트 계산과 동일) ===
+ * ✅ holdStore 업데이트
+ * - 조건을 만족(표시대상)한 경우에만 hold 생성/갱신
+ * - "새 신호" 정의:
+ *   1) 기존 hold가 없던 종목이 처음 CONFIRM/NEAR로 뜸
+ *   2) 기존 hold의 type이 바뀜 (NEAR→CONFIRM, CONFIRM→NEAR 등)
+ * - 새 신호면 seenAt을 "지금"으로 갱신해서 맨 위로 오게 함
+ * - 새 신호가 아니면 seenAt은 유지(계속 맨 위로 고정되는 현상 방지)
+ */
+function upsertHold_(uiSymbol, snap, cfg) {
+  const type = snap?.type;
+  const isTypeOk = (type === "CONFIRM" || type === "NEAR");
+  if (!isTypeOk) return;
+
+  // RSI 필터를 쓰는 경우 passRsi 통과한 것만 hold 저장(표시 로직만, 계산은 그대로)
+  if (cfg.USE_RSI_FILTER && snap.passRsi !== "Y") return;
+
+  const now = Date.now();
+  const ttl = ttlMsByType(type);
+  if (!ttl) return;
+
+  const prev = holdStore.get(uiSymbol);
+
+  const isNewSignal =
+    !prev || !prev.snap || prev.snap.type !== type;
+
+  const seenAt = isNewSignal ? now : prev.seenAt; // ✅ 새 신호만 맨 위로
+  const expiresAt = now + ttl;
+
+  holdStore.set(uiSymbol, {
+    snap: { ...snap },
+    seenAt,
+    expiresAt
+  });
+}
+
+function cleanupHolds_() {
+  const now = Date.now();
+  for (const [sym, v] of holdStore.entries()) {
+    if (!v || !v.expiresAt || now > v.expiresAt) {
+      holdStore.delete(sym);
+    }
+  }
+}
+
+function getHoldMeta_(uiSymbol) {
+  const v = holdStore.get(uiSymbol);
+  if (!v) return { seenAt: 0, expiresAt: 0 };
+  return { seenAt: Number(v.seenAt) || 0, expiresAt: Number(v.expiresAt) || 0 };
+}
+
+/**
+ * === 심볼 하나 계산(구글시트 계산과 동일) ===
  */
 async function computeSnapForSymbol(uiSymbol, apiSymbol, cfg) {
   const price = await fetchMexcFairPrice(apiSymbol); // fairPrice
@@ -118,7 +187,7 @@ async function computeSnapForSymbol(uiSymbol, apiSymbol, cfg) {
   // 다음 비교용 trend 저장
   if (curTrend !== "NONE") trendStore.set(uiSymbol, curTrend);
 
-  return {
+  const snap = {
     sym: uiSymbol,
     price,
     ma30,
@@ -130,12 +199,33 @@ async function computeSnapForSymbol(uiSymbol, apiSymbol, cfg) {
     passRsi: passRsi ? "Y" : "N",
     updated: nowIso()
   };
+
+  // ✅ 표시 유지 로직(계산은 그대로, 표시만 유지)
+  upsertHold_(uiSymbol, snap, cfg);
+
+  return snap;
 }
 
 /**
  * === TOP30 구성(구글시트 renderTop30_ 동일) ===
+ * ✅ 추가: 새 신호(holdStore.seenAt 최신) 우선 정렬
+ * - 점수(score) 계산은 그대로 유지
  */
 function buildTop30FromSnaps(snaps, cfg) {
+  // ✅ hold 만료 정리
+  cleanupHolds_();
+
+  // ✅ 이번 스캔 결과에 없더라도, hold에 남아있으면 후보에 포함(표시 유지)
+  const snapMap = new Map();
+  for (const s of snaps) {
+    if (s?.sym) snapMap.set(s.sym, s);
+  }
+  for (const [sym, v] of holdStore.entries()) {
+    if (!snapMap.has(sym) && v?.snap) {
+      snaps.push(v.snap);
+    }
+  }
+
   const candidates = [];
 
   for (const s of snaps) {
@@ -147,14 +237,24 @@ function buildTop30FromSnaps(snaps, cfg) {
     // RSI 필터
     if (cfg.USE_RSI_FILTER && s.passRsi !== "Y") continue;
 
-    // 점수: 확정 우선, 그 다음 dev 절대값 큰 순
+    // 점수: 확정 우선, 그 다음 dev 절대값 큰 순 (구글시트 동일)
     const scoreBase = s.type === "CONFIRM" ? 1000000 : 0;
     const score = scoreBase + Math.abs(Number(s.devPct) || 0) * 1000;
 
-    candidates.push({ ...s, score });
+    const { seenAt } = getHoldMeta_(s.sym);
+
+    candidates.push({ ...s, score, _seenAt: seenAt });
   }
 
-  candidates.sort((a, b) => b.score - a.score);
+  // ✅ 새 신호 우선(최근 seenAt 큰 것)
+  // ✅ seenAt 같으면 기존 score 정렬 유지
+  candidates.sort((a, b) => {
+    const sa = Number(a._seenAt) || 0;
+    const sb = Number(b._seenAt) || 0;
+    if (sb !== sa) return sb - sa;
+    return (Number(b.score) || 0) - (Number(a.score) || 0);
+  });
+
   const top = candidates.slice(0, TOP_N);
 
   return top.map((s, idx) => ({
@@ -182,7 +282,7 @@ export async function runTop30Scan({
   concurrency = Number(process.env.CONCURRENCY || 2),
   cfg = {}
 } = {}) {
-  // cfg 기본값 세팅
+  // cfg 기본값 세팅(계산방식 동일)
   const effectiveCfg = {
     TREND_BAND_PCT: Number.isFinite(cfg.TREND_BAND_PCT) ? cfg.TREND_BAND_PCT : 0.5,
     TURN_NEAR_PCT: Number.isFinite(cfg.TURN_NEAR_PCT) ? cfg.TURN_NEAR_PCT : 0.3,
