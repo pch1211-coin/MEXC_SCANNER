@@ -8,13 +8,46 @@ function fmt(n, digits = 6) {
   if (n === null || n === undefined) return "";
   const x = Number(n);
   if (!Number.isFinite(x)) return String(n);
-  // 너무 긴 소수는 보기 좋게
   return x.toFixed(digits).replace(/\.?0+$/, "");
 }
 
-function abs(n) {
+function absVal(n) {
   const x = Number(n);
   return Number.isFinite(x) ? Math.abs(x) : 0;
+}
+
+function Th({ children }) {
+  return (
+    <th
+      style={{
+        textAlign: "left",
+        padding: "10px 10px",
+        fontSize: 12,
+        opacity: 0.85,
+        borderBottom: "1px solid rgba(0,0,0,0.08)",
+        position: "sticky",
+        top: 0,
+        background: "rgba(0,0,0,0.04)"
+      }}
+    >
+      {children}
+    </th>
+  );
+}
+
+function Td({ children, style }) {
+  return (
+    <td
+      style={{
+        padding: "10px 10px",
+        borderBottom: "1px solid rgba(0,0,0,0.06)",
+        fontSize: 13,
+        ...style
+      }}
+    >
+      {children}
+    </td>
+  );
 }
 
 export default function Page() {
@@ -25,7 +58,6 @@ export default function Page() {
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState({ ok: false, updated: "", error: "" });
 
-  // UI 상태
   const [filterType, setFilterType] = useState("ALL"); // ALL | CONFIRM | NEAR
   const [sortKey, setSortKey] = useState("RANK"); // RANK | ABS_DEV | UPDATED
   const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
@@ -55,11 +87,12 @@ export default function Page() {
 
   const filtered = useMemo(() => {
     let out = [...rows];
+
     if (filterType === "CONFIRM") out = out.filter((r) => r.type === "전환확정");
     if (filterType === "NEAR") out = out.filter((r) => r.type === "전환근접");
 
     if (sortKey === "ABS_DEV") {
-      out.sort((a, b) => abs(b.deviationPct) - abs(a.deviationPct));
+      out.sort((a, b) => absVal(b.deviationPct) - absVal(a.deviationPct));
     } else if (sortKey === "UPDATED") {
       out.sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
     } else {
@@ -70,12 +103,15 @@ export default function Page() {
   }, [rows, filterType, sortKey]);
 
   return (
-    <div style={{ padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
+    <div
+      style={{
+        padding: 16,
+        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+      }}
+    >
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0 }}>MEXC Futures DASH</h2>
-        <span style={{ fontSize: 12, opacity: 0.75 }}>
-          backend: {BACKEND}
-        </span>
+        <span style={{ fontSize: 12, opacity: 0.75 }}>backend: {BACKEND}</span>
       </div>
 
       <div style={{ marginTop: 8, fontSize: 13 }}>
@@ -87,9 +123,7 @@ export default function Page() {
         <div style={{ marginTop: 4, opacity: 0.8 }}>
           updated: <b>{meta.updated || "-"}</b>
           {meta.error ? (
-            <div style={{ marginTop: 6, color: "crimson" }}>
-              error: {meta.error}
-            </div>
+            <div style={{ marginTop: 6, color: "crimson" }}>error: {meta.error}</div>
           ) : null}
         </div>
       </div>
@@ -160,10 +194,17 @@ export default function Page() {
       </div>
 
       {/* 테이블 */}
-      <div style={{ marginTop: 14, overflowX: "auto", border: "1px solid rgba(0,0,0,0.1)", borderRadius: 14 }}>
+      <div
+        style={{
+          marginTop: 14,
+          overflowX: "auto",
+          border: "1px solid rgba(0,0,0,0.1)",
+          borderRadius: 14
+        }}
+      >
         <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 920 }}>
           <thead>
-            <tr style={{ background: "rgba(0,0,0,0.04)" }}>
+            <tr>
               <Th>Rank</Th>
               <Th>Symbol</Th>
               <Th>Direction</Th>
@@ -172,4 +213,57 @@ export default function Page() {
               <Th>Price</Th>
               <Th>MA30</Th>
               <Th>RSI14</Th>
-              <Th>Dev(%)</
+              <Th>Dev(%)</Th>
+              <Th>Updated</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr>
+                <td colSpan={10} style={{ padding: 14, opacity: 0.7 }}>
+                  조건에 맞는 항목이 없습니다.
+                </td>
+              </tr>
+            ) : (
+              filtered.map((r) => {
+                const type = r.type || "";
+                const isConfirm = type === "전환확정";
+                const isNear = type === "전환근접";
+
+                const bg = isConfirm
+                  ? "rgba(255,77,77,0.25)"
+                  : isNear
+                  ? "rgba(255,242,204,0.9)"
+                  : "transparent";
+
+                return (
+                  <tr key={r.symbol} style={{ background: bg }}>
+                    <Td>{r.rank}</Td>
+                    <Td style={{ fontWeight: 800 }}>{r.symbol}</Td>
+                    <Td>{r.direction}</Td>
+                    <Td style={{ fontWeight: 800 }}>
+                      {type}
+                      {isConfirm ? " 🔴" : isNear ? " 🟡" : ""}
+                    </Td>
+                    <Td>{fmt(r.bandPct, 3)}</Td>
+                    <Td>{fmt(r.price, 8)}</Td>
+                    <Td>{fmt(r.ma30, 8)}</Td>
+                    <Td>{fmt(r.rsi14, 2)}</Td>
+                    <Td style={{ fontWeight: 700 }}>{fmt(r.deviationPct, 4)}</Td>
+                    <Td>{r.updated}</Td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
+        * 전환확정=빨강, 전환근접=노랑
+        <br />
+        * 이 대시보드는 백엔드 <code>/api/top30</code> 결과를 그대로 표시합니다.
+      </div>
+    </div>
+  );
+}
