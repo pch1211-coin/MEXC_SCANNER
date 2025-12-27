@@ -148,7 +148,11 @@ export default function Page() {
       }
 
       setRole(String(j.role || ""));
-      setMeta({ ok: true, updated: j.updated || "", error: "" });
+     const updatedKst = j.updated
+  ? new Date(j.updated).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })
+  : "";
+
+setMeta({ ok: true, updated: updatedKst, error: "" });
       setRows(Array.isArray(j.data) ? j.data : []);
     } catch (e) {
       setMeta({ ok: false, updated: "", error: String(e?.message || e) });
