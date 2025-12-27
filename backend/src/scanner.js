@@ -7,9 +7,9 @@ import { apiToUiSymbol } from "./symbol.js";
  * (구글시트 로직 기반)
  */
 const TOP_N = 30;
-const DEFAULT_TREND_BAND_PCT = 0.5;
-const TURN_NEAR_PCT = 0.3;
-const RSI_THRESHOLD = 50;
+const DEFAULT_TREND_BAND_PCT = 0.35;
+const TURN_NEAR_PCT = 0.5;
+const RSI_THRESHOLD = 48;
 
 // 상태 저장 (Render 재시작/슬립이면 초기화될 수 있음)
 const trendStore = new Map(); // uiSymbol -> "UP" | "DOWN" | "NEUTRAL" | "NONE"
