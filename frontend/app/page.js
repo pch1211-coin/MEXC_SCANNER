@@ -17,22 +17,21 @@ function useAuthKey() {
       const k = localStorage.getItem(LS_KEY) || "";
       const r = localStorage.getItem(LS_ROLE) || "view";
       setApiKey(k);
-      setRole(r === "admin" ? "admin" : "view");
+      setRole(r);
     } catch {
+      // localStorage 접근 실패 환경 대비
       setApiKey("");
       setRole("view");
     }
   }, []);
 
   const save = (k, r) => {
-    const key = String(k || "").trim();
-    const role2 = r === "admin" ? "admin" : "view";
     try {
-      localStorage.setItem(LS_KEY, key);
-      localStorage.setItem(LS_ROLE, role2);
+      localStorage.setItem(LS_KEY, k);
+      localStorage.setItem(LS_ROLE, r);
     } catch {}
-    setApiKey(key);
-    setRole(role2);
+    setApiKey(k);
+    setRole(r);
   };
 
   const logout = () => {
@@ -74,12 +73,12 @@ function LoginGate({ onSave }) {
           boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
         }}
       >
-        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>
           MEXC Scanner 로그인
         </div>
 
-        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 10 }}>
-          관리자/읽기전용 중 선택 후 비밀번호(API Key)를 입력하세요.
+        <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 10 }}>
+          권한 선택 후 API Key(비밀번호)를 입력하세요.
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -96,19 +95,28 @@ function LoginGate({ onSave }) {
         <input
           value={k}
           onChange={(e) => setK(e.target.value)}
-          placeholder="비밀번호(API Key) 입력"
-          style={{ width: "100%", padding: 10, borderRadius: 10, marginBottom: 10 }}
+          placeholder="API Key 입력"
+          style={{
+            width: "100%",
+            padding: 10,
+            borderRadius: 10,
+            marginBottom: 10
+          }}
         />
 
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            onClick={() => onSave(k.trim(), r)}
-            disabled={!k.trim()}
-            style={{ flex: 1, padding: 10, borderRadius: 10, fontWeight: 700, cursor: "pointer" }}
-          >
-            로그인
-          </button>
-        </div>
+        <button
+          onClick={() => onSave(k.trim(), r)}
+          disabled={!k.trim()}
+          style={{
+            width: "100%",
+            padding: 10,
+            borderRadius: 10,
+            fontWeight: 800,
+            cursor: k.trim() ? "pointer" : "not-allowed"
+          }}
+        >
+          로그인
+        </button>
       </div>
     </div>
   );
@@ -118,6 +126,8 @@ function LoginGate({ onSave }) {
  *  UI helpers
  *  ========================= */
 const DEFAULT_REFRESH_MS = 5000;
+const CONFIRM_TTL_MS = 3 * 60 * 1000; // 3분
+const NEAR_TTL_MS = 1 * 60 * 1000;    // 1분
 
 function fmt(n, digits = 6) {
   if (n === null || n === undefined) return "";
@@ -166,227 +176,175 @@ function Td({ children, style }) {
 }
 
 /** =========================
- *  Signal retention rules
- *  =========================
- *  CONFIRM: 3분 유지
- *  NEAR:    1분 유지
- *  새 신호는 맨 위로
- */
-const TTL_MS = {
-  "전환확정": 3 * 60 * 1000,
-  "전환근접": 1 * 60 * 1000
-};
-
-function nowMs() {
-  return Date.now();
-}
-
-function pickTypeTtl(typeText) {
-  return TTL_MS[typeText] || 0;
-}
-
-/**
- * key 생성: symbol + type(확정/근접)
- * 같은 코인이 확정/근접으로 번갈아 오면 서로 다른 신호로 취급
- */
-function signalKeyOfRow(r) {
-  const sym = String(r?.symbol || "").trim();
-  const type = String(r?.type || "").trim();
-  return `${sym}__${type}`;
-}
-
+ *  Page
+ *  ========================= */
 export default function Page() {
-  /**
-   * ✅ 중요: Hook들은 항상 "조건문 return"보다 위에 있어야 함
-   * => 이 구조로 React 310(조건부 Hook) 재발 방지
-   */
+  // ✅ Hook은 무조건 최상단(조건부 return 위) — 이게 #310 방지 핵심
   const { apiKey, role, save, logout } = useAuthKey();
 
   const BACKEND =
     process.env.NEXT_PUBLIC_BACKEND_URL ||
-    process.env.NEXT_PUBLIC_BACKEND_URL?.toString?.() ||
     "https://mexc-scanner-backend.onrender.com";
 
-  // 서버에서 받은 원본 rows
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState([]); // 화면에 표시되는(만료 반영) rows
   const [meta, setMeta] = useState({ ok: false, updated: "", error: "" });
 
-  // UI controls
   const [filterType, setFilterType] = useState("ALL"); // ALL | CONFIRM | NEAR
-  const [sortKey, setSortKey] = useState("NEW"); // NEW | RANK | ABS_DEV | UPDATED
+  const [sortKey, setSortKey] = useState("NEW"); // NEW | ABS_DEV | RANK
   const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
   const [loading, setLoading] = useState(false);
 
-  /**
-   * 신호 유지용 저장소(렌더링과 무관하게 유지되도록 ref)
-   * Map<signalKey, { row, firstSeenMs, lastSeenMs, expiresAtMs }>
-   */
-  const storeRef = useRef(new Map());
+  // 내부 저장소: “신호 유지(확정 3분 / 근접 1분)” 구현용
+  const storeRef = useRef(new Map()); // key: symbol, value: {row, firstSeen, lastSeen, expiresAt}
 
-  // ✅ 로그인 안되어 있으면 여기서만 return (Hook 뒤!)
+  // ✅ 로그인 전에는 여기서만 return (Hook 이후)
   if (!apiKey) {
     return <LoginGate onSave={save} />;
   }
 
   async function load() {
+    const controller = new AbortController();
+    const sig = controller.signal;
+
     try {
       setLoading(true);
 
-      const url = `${BACKEND}/api/top30`;
-      const r = await fetch(url, {
+      const r = await fetch(`${BACKEND}/api/top30`, {
         cache: "no-store",
-        headers: { "x-api-key": apiKey }
+        headers: { "x-api-key": apiKey },
+        signal: sig
       });
 
       const j = await r.json().catch(async () => {
         const t = await r.text().catch(() => "");
-        return { ok: false, error: t || `HTTP ${r.status}` };
+        throw new Error(`HTTP ${r.status} ${t.slice(0, 160)}`);
       });
 
-      setMeta({ ok: !!j.ok, updated: j.updated || "", error: j.error || "" });
-      const data = Array.isArray(j.data) ? j.data : [];
-      setRows(data);
+      if (!r.ok || !j?.ok) {
+        throw new Error(j?.error || `HTTP ${r.status}`);
+      }
 
-      // ---- 신호 유지(store) 업데이트 ----
-      const tNow = nowMs();
-      const store = storeRef.current;
+      setMeta({ ok: true, updated: j.updated || "", error: "" });
 
-      // 1) 이번 fetch에서 들어온 신호들 mark
-      for (const row of data) {
-        const type = String(row?.type || "");
-        const ttl = pickTypeTtl(type);
-        if (!ttl) continue; // 확정/근접만 유지 대상
+      const incoming = Array.isArray(j.data) ? j.data : [];
+      const now = Date.now();
 
-        const key = signalKeyOfRow(row);
-        const prev = store.get(key);
+      // 스토어 업데이트 + TTL 적용
+      for (const it of incoming) {
+        if (!it?.symbol) continue;
 
-        if (!prev) {
-          // 새 신호(맨 위로 보내기 위해 firstSeenMs 기록)
-          store.set(key, {
-            row,
-            firstSeenMs: tNow,
-            lastSeenMs: tNow,
-            expiresAtMs: tNow + ttl
-          });
-        } else {
-          // 기존 신호 갱신(유지 시간 연장)
-          store.set(key, {
-            row, // 최신 데이터로 갱신
-            firstSeenMs: prev.firstSeenMs,
-            lastSeenMs: tNow,
-            expiresAtMs: tNow + ttl
-          });
+        const type = String(it.type || "");
+        const ttl = type === "전환확정" ? CONFIRM_TTL_MS : type === "전환근접" ? NEAR_TTL_MS : 0;
+        if (!ttl) continue; // 확정/근접만 유지 대상으로
+
+        const key = String(it.symbol);
+        const prev = storeRef.current.get(key);
+
+        const firstSeen = prev?.firstSeen ?? now;
+        const lastSeen = now;
+        const expiresAt = now + ttl;
+
+        storeRef.current.set(key, {
+          row: it,
+          firstSeen,
+          lastSeen,
+          expiresAt
+        });
+      }
+
+      // 만료 정리 + 화면 rows 재구성
+      const alive = [];
+      for (const [key, v] of storeRef.current.entries()) {
+        if (!v || v.expiresAt <= now) {
+          storeRef.current.delete(key);
+          continue;
         }
+        alive.push({
+          ...v.row,
+          __firstSeen: v.firstSeen,
+          __lastSeen: v.lastSeen,
+          __expiresAt: v.expiresAt
+        });
       }
 
-      // 2) 만료된 신호 정리
-      for (const [k, v] of store.entries()) {
-        if (v.expiresAtMs <= tNow) store.delete(k);
-      }
+      setRows(alive);
     } catch (e) {
       setMeta({ ok: false, updated: "", error: String(e?.message || e) });
-      setRows([]);
+      // rows는 유지(= TTL 남아있는 신호는 계속 보이게)
     } finally {
       setLoading(false);
     }
+
+    // AbortController는 여기선 즉시 해제할 필요 없지만, 안전하게 리턴
+    return () => controller.abort();
   }
 
-  // 자동 새로고침
+  // 주기 갱신
   useEffect(() => {
-    load();
-    const t = setInterval(load, refreshMs);
-    return () => clearInterval(t);
+    let stop = false;
+
+    const run = async () => {
+      if (그만) return;
+      await load();
+    };
+
+    run();
+    const t = setInterval(run, refreshMs);
+
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshMs, apiKey, BACKEND]);
 
-  /**
-   * 화면에 표시할 rows:
-   * - 서버 응답 rows + 유지(store) rows를 합친 뒤
-   * - TTL 안에 있는 신호는 남겨서 “너무 빨리 사라짐” 방지
-   */
-  const mergedRows = useMemo(() => {
-    const tNow = nowMs();
-    const store = storeRef.current;
+  // 만료 카운트다운 정리(1초마다 만료된 신호 제거)
+  useEffect(() => {
+    const t = setInterval(() => {
+      const now = Date.now();
+      let changed = false;
 
-    // 만료 정리(렌더 타이밍에서도 한번 더)
-    for (const [k, v] of store.entries()) {
-      if (v.expiresAtMs <= tNow) store.delete(k);
-    }
-
-    // storeRows
-    const storeRows = [];
-    for (const v of store.values()) {
-      storeRows.push({
-        ...v.row,
-        __firstSeenMs: v.firstSeenMs,
-        __expiresAtMs: v.expiresAtMs
-      });
-    }
-
-    /**
-     * 서버 rows에도 firstSeen을 붙여주되,
-     * store에 있으면 store 기준 firstSeen 사용
-     */
-    const out = rows.map((r) => {
-      const key = signalKeyOfRow(r);
-      const v = store.get(key);
-      return {
-        ...r,
-        __firstSeenMs: v?.firstSeenMs ?? 0,
-        __expiresAtMs: v?.expiresAtMs ?? 0
-      };
-    });
-
-    // 중복 제거: 같은 key는 storeRows를 우선(최신 유지/정렬 정보 포함)
-    const seen = new Set();
-    const merged = [];
-
-    for (const r of storeRows) {
-      const key = signalKeyOfRow(r);
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push(r);
+      for (const [key, v] of storeRef.current.entries()) {
+        if (!v || v.expiresAt <= now) {
+          storeRef.current.delete(key);
+          changed = true;
+        }
       }
-    }
-    for (const r of out) {
-      const key = signalKeyOfRow(r);
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push(r);
-      }
-    }
 
-    return merged;
-  }, [rows]);
+      if (changed) {
+        const alive = [];
+        for (const v of storeRef.current.values()) {
+          alive.push({
+            ...v.row,
+            __firstSeen: v.firstSeen,
+            __lastSeen: v.lastSeen,
+            __expiresAt: v.expiresAt
+          });
+        }
+        setRows(alive);
+      }
+    }, 1000);
+
+    return () => clearInterval(t);
+  }, []);
 
   const filtered = useMemo(() => {
-    let out = [...mergedRows];
+    let out = [...rows];
 
     if (filterType === "CONFIRM") out = out.filter((r) => r.type === "전환확정");
     if (filterType === "NEAR") out = out.filter((r) => r.type === "전환근접");
 
-    /**
-     * ✅ 새 신호 맨 위:
-     * - NEW 정렬: __firstSeenMs 내림차순
-     * - 동점이면 Updated 최신
-     */
+    // ✅ 새 신호 맨 위: lastSeen 기준 내림차순
     if (sortKey === "NEW") {
-      out.sort((a, b) => {
-        const fa = Number(a.__firstSeenMs || 0);
-        const fb = Number(b.__firstSeenMs || 0);
-        if (fb !== fa) return fb - fa;
-        return String(b.updated).localeCompare(String(a.updated));
-      });
+      out.sort((a, b) => Number(b.__lastSeen || 0) - Number(a.__lastSeen || 0));
     } else if (sortKey === "ABS_DEV") {
       out.sort((a, b) => absVal(b.deviationPct) - absVal(a.deviationPct));
-    } else if (sortKey === "UPDATED") {
-      out.sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
     } else {
-      out.sort((a, b) => Number(a.rank) - Number(b.rank));
+      out.sort((a, b) => Number(a.rank || 9999) - Number(b.rank || 9999));
     }
 
     return out;
-  }, [mergedRows, filterType, sortKey]);
+  }, [rows, filterType, sortKey]);
 
   return (
     <div
@@ -402,8 +360,8 @@ export default function Page() {
         <button
           onClick={logout}
           style={{
-            marginLeft: "auto",
-            padding: "8px 10px",
+            marginLeft: 6,
+            padding: "6px 10px",
             borderRadius: 10,
             border: "1px solid rgba(0,0,0,0.15)",
             background: "white",
@@ -424,7 +382,9 @@ export default function Page() {
         <div style={{ marginTop: 4, opacity: 0.8 }}>
           updated: <b>{meta.updated || "-"}</b>
           {meta.error ? (
-            <div style={{ marginTop: 6, color: "crimson" }}>error: {meta.error}</div>
+            <div style={{ marginTop: 6, color: "crimson", wordBreak: "break-word" }}>
+              error: {meta.error}
+            </div>
           ) : null}
         </div>
       </div>
@@ -459,10 +419,9 @@ export default function Page() {
             onChange={(e) => setSortKey(e.target.value)}
             style={{ width: "100%", padding: 10, borderRadius: 10 }}
           >
-            <option value="NEW">새 신호 맨 위</option>
-            <option value="RANK">Rank 순</option>
+            <option value="NEW">새 신호 순(맨 위)</option>
             <option value="ABS_DEV">Deviation(절대값) 큰 순</option>
-            <option value="UPDATED">최신 갱신 순</option>
+            <option value="RANK">Rank 순</option>
           </select>
         </div>
 
@@ -487,7 +446,7 @@ export default function Page() {
             border: "1px solid rgba(0,0,0,0.15)",
             background: "white",
             cursor: "pointer",
-            fontWeight: 700
+            fontWeight: 800
           }}
         >
           지금 갱신
@@ -527,7 +486,7 @@ export default function Page() {
               </tr>
             ) : (
               filtered.map((r) => {
-                const type = r.type || "";
+                const type = String(r.type || "");
                 const isConfirm = type === "전환확정";
                 const isNear = type === "전환근접";
 
@@ -538,11 +497,11 @@ export default function Page() {
                   : "transparent";
 
                 return (
-                  <tr key={signalKeyOfRow(r)} style={{ background: bg }}>
+                  <tr key={r.symbol} style={{ background: bg }}>
                     <Td>{r.rank}</Td>
-                    <Td style={{ fontWeight: 800 }}>{r.symbol}</Td>
+                    <Td style={{ fontWeight: 900 }}>{r.symbol}</Td>
                     <Td>{r.direction}</Td>
-                    <Td style={{ fontWeight: 800 }}>
+                    <Td style={{ fontWeight: 900 }}>
                       {type}
                       {isConfirm ? " 🔴" : isNear ? " 🟡" : ""}
                     </Td>
@@ -550,7 +509,7 @@ export default function Page() {
                     <Td>{fmt(r.price, 8)}</Td>
                     <Td>{fmt(r.ma30, 8)}</Td>
                     <Td>{fmt(r.rsi14, 2)}</Td>
-                    <Td style={{ fontWeight: 700 }}>{fmt(r.deviationPct, 4)}</Td>
+                    <Td style={{ fontWeight: 800 }}>{fmt(r.deviationPct, 4)}</Td>
                     <Td>{r.updated}</Td>
                   </tr>
                 );
@@ -561,11 +520,11 @@ export default function Page() {
       </div>
 
       <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
-        * 전환확정=빨강(3분 유지), 전환근접=노랑(1분 유지)
+        * 전환확정=3분 유지(빨강), 전환근접=1분 유지(노랑)
         <br />
-        * 새 신호는 “새 신호 맨 위” 정렬에서 자동으로 맨 위에 표시됩니다.
+        * 새 신호는 자동으로 맨 위에 올라옵니다.
         <br />
-        * 이 대시보드는 백엔드 <code>/api/top30</code> 결과를 표시하며, TTL 동안은 화면에서 유지됩니다.
+        * 이 대시보드는 백엔드 <code>/api/top30</code> 결과를 기준으로 표시합니다.
       </div>
     </div>
   );
