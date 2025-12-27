@@ -1,77 +1,72 @@
+// backend/src/server.js
 import express from "express";
 import cors from "cors";
 import { runTop30Scan } from "./scanner.js";
 
 const app = express();
-app.use(cors());
 
-// ✅ 비용절감 고정값 (원하면 환경변수로도 조절 가능)
-const FIX_MAX_SYMBOLS = Number(process.env.MAX_SYMBOLS || 50); // ✅ 50개만
-const FIX_CONCURRENCY = Number(process.env.CONCURRENCY || 2);  // ✅ 동시요청 낮게 (Workers 부담↓)
-const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 30000); // ✅ 30초 캐시
+// ---- CORS (프론트에서 x-api-key 헤더 보내기 때문에 허용 필요)
+app.use(
+  cors({
+    origin: true,
+    credentials: false,
+    allowedHeaders: ["Content-Type", "x-api-key"],
+  })
+);
 
-// ✅ 스캔 캐시 & 중복스캔 방지
-let cache = {
-  ts: 0,
-  payload: null
-};
-let inflightPromise = null;
-
+// ---- Health (인증 없이)
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-app.get("/api/top30", async (req, res) => {
+// ---- Auth Middleware
+function requireApiKey(req, res, next) {
+  const key = String(req.headers["x-api-key"] || "").trim();
+
+  const adminKey = String(process.env.API_KEY_ADMIN || "").trim();
+  const viewKey = String(process.env.API_KEY_VIEW || "").trim();
+
+  if (!key) {
+    return res.status(401).json({ ok: false, error: "Missing x-api-key" });
+  }
+
+  if (adminKey && key === adminKey) {
+    req.userRole = "admin";
+    return next();
+  }
+  if (viewKey && key === viewKey) {
+    req.userRole = "view";
+    return next();
+  }
+
+  return res.status(401).json({ ok: false, error: "Invalid API key" });
+}
+
+// ---- Top30 (인증 필요)
+app.get("/api/top30", requireApiKey, async (req, res) => {
   try {
-    // ✅ 30초 캐시: 아직 유효하면 그대로 반환
-    const now = Date.now();
-    if (cache.payload && now - cache.ts < CACHE_TTL_MS) {
-      return res.json(cache.payload);
-    }
+    const interval = String(req.query.interval || process.env.INTERVAL || "Min15");
+    const limit = Number(req.query.limit || process.env.LIMIT || 200);
+    const maxSymbols = Number(process.env.MAX_SYMBOLS || 250);
+    const concurrency = Number(process.env.CONCURRENCY || 6);
 
-    // ✅ 동시에 여러 요청이 와도 스캔은 1번만
-    if (!inflightPromise) {
-      inflightPromise = (async () => {
-        const interval = String(req.query.interval || process.env.INTERVAL || "Min15");
-        const limit = Number(req.query.limit || process.env.LIMIT || 200);
+    const cfg = {
+      TREND_BAND_PCT: Number(process.env.TREND_BAND_PCT || 0.3),
+      RSI50_FILTER: String(process.env.RSI50_FILTER || "true"),
+      ONLY_USDT: String(process.env.ONLY_USDT || "true"),
+      SORT_BY: String(process.env.SORT_BY || "band"),
+    };
 
-        const cfg = {
-          TREND_BAND_PCT: Number(process.env.TREND_BAND_PCT || 0.3),
-          RSI50_FILTER: String(process.env.RSI50_FILTER || "true"),
-          ONLY_USDT: String(process.env.ONLY_USDT || "true"),
-          SORT_BY: String(process.env.SORT_BY || "band"),
-        };
+    const data = await runTop30Scan({ interval, limit, maxSymbols, concurrency, cfg });
 
-        // ✅ 핵심: 심볼 수 50개 고정 / concurrency 낮춤
-        const data = await runTop30Scan({
-          interval,
-          limit,
-          maxSymbols: FIX_MAX_SYMBOLS,
-          concurrency: FIX_CONCURRENCY,
-          cfg
-        });
-
-        const payload = {
-          ok: true,
-          interval,
-          limit,
-          maxSymbols: FIX_MAX_SYMBOLS,
-          concurrency: FIX_CONCURRENCY,
-          cachedForMs: CACHE_TTL_MS,
-          updated: new Date().toISOString(),
-          data
-        };
-
-        cache = { ts: Date.now(), payload };
-        return payload;
-      })().finally(() => {
-        inflightPromise = null;
-      });
-    }
-
-    const payload = await inflightPromise;
-    return res.json(payload);
-
+    res.json({
+      ok: true,
+      role: req.userRole || "view",
+      interval,
+      limit,
+      updated: new Date().toISOString(),
+      data,
+    });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
