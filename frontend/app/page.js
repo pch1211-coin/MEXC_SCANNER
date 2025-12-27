@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 /** =========================
  *  Login (LocalStorage)
@@ -11,40 +11,29 @@ const LS_ROLE = "MEXC_SCANNER_ROLE"; // "admin" | "view"
 function useAuthKey() {
   const [apiKey, setApiKey] = useState("");
   const [role, setRole] = useState("view");
+  const hydratedRef = useRef(false);
 
   useEffect(() => {
-    try {
-      const k = localStorage.getItem(LS_KEY) || "";
-      const r = localStorage.getItem(LS_ROLE) || "view";
-      setApiKey(k);
-      setRole(r);
-    } catch {
-      // localStorage 접근 불가 상황 방어
-      setApiKey("");
-      setRole("view");
-    }
+    // Next/React hydration 이후 1회만
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+
+    const k = localStorage.getItem(LS_KEY) || "";
+    const r = localStorage.getItem(LS_ROLE) || "view";
+    setApiKey(k);
+    setRole(r);
   }, []);
 
   const save = (k, r) => {
-    const kk = String(k || "").trim();
-    const rr = r === "admin" ? "admin" : "view";
-    try {
-      localStorage.setItem(LS_KEY, kk);
-      localStorage.setItem(LS_ROLE, rr);
-    } catch {
-      // ignore
-    }
-    setApiKey(kk);
-    setRole(rr);
+    localStorage.setItem(LS_KEY, k);
+    localStorage.setItem(LS_ROLE, r);
+    setApiKey(k);
+    setRole(r);
   };
 
   const logout = () => {
-    try {
-      localStorage.removeItem(LS_KEY);
-      localStorage.removeItem(LS_ROLE);
-    } catch {
-      // ignore
-    }
+    localStorage.removeItem(LS_KEY);
+    localStorage.removeItem(LS_ROLE);
     setApiKey("");
     setRole("view");
   };
@@ -87,7 +76,7 @@ function LoginGate({ onSave }) {
         </div>
 
         <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
-          관리자/읽기전용을 선택하고 비밀번호(API Key)를 입력하세요.
+          관리자/읽기전용 중 선택 후 비밀번호(API Key)를 입력하세요.
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -120,23 +109,13 @@ function LoginGate({ onSave }) {
               setShow(false);
             }}
             disabled={!k.trim()}
-            style={{
-              flex: 1,
-              padding: 10,
-              borderRadius: 10,
-              fontWeight: 700,
-              cursor: k.trim() ? "pointer" : "not-allowed"
-            }}
+            style={{ flex: 1, padding: 10, borderRadius: 10, fontWeight: 700 }}
           >
             로그인
           </button>
           <button
             onClick={() => setShow(false)}
-            style={{
-              padding: 10,
-              borderRadius: 10,
-              cursor: "pointer"
-            }}
+            style={{ padding: 10, borderRadius: 10 }}
           >
             닫기
           </button>
@@ -147,9 +126,15 @@ function LoginGate({ onSave }) {
 }
 
 /** =========================
- *  UI Helpers
+ *  UI helpers
  *  ========================= */
 const DEFAULT_REFRESH_MS = 5000;
+
+// 유지 시간(요구사항)
+const KEEP_MS = {
+  "전환확정": 3 * 60 * 1000, // 3분
+  "전환근접": 1 * 60 * 1000  // 1분
+};
 
 function fmt(n, digits = 6) {
   if (n === null || n === undefined) return "";
@@ -198,20 +183,31 @@ function Td({ children, style }) {
 }
 
 /** =========================
- *  Page
- *  ========================= */
+ *  핵심: 신호 유지(프론트 캐시)
+ *  - 백엔드가 다음 refresh에서 목록에서 빠져도,
+ *    CONFIRM 3분 / NEAR 1분 동안 화면에 남김
+ *  - 새로 생긴 신호는 맨 위로 올림
+ * =========================
+ *
+ * cache 구조:
+ * key = `${symbol}|${type}` (type이 바뀌면 새 신호로 취급)
+ * value = {
+ *   row: 백엔드 row 원본,
+ *   firstSeenAt: 최초 등장 시간,
+ *   lastSeenAt: 마지막으로 백엔드에서 관측된 시간,
+ *   expiresAt: 만료 시간
+ * }
+ */
+
 export default function Page() {
-  /**
-   * ✅ 중요: Hook은 무조건 최상단에서 "항상 같은 순서"로 실행되어야 함
-   * (React error #310 방지)
-   */
+  // ✅ Hook은 항상 최상단 (조건 return 보다 먼저)
   const { apiKey, role, save, logout } = useAuthKey();
 
   const BACKEND =
     process.env.NEXT_PUBLIC_BACKEND_URL ||
     "https://mexc-scanner-backend.onrender.com";
 
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState([]); // 최종 렌더용 rows
   const [meta, setMeta] = useState({ ok: false, updated: "", error: "" });
 
   const [filterType, setFilterType] = useState("ALL"); // ALL | CONFIRM | NEAR
@@ -219,10 +215,51 @@ export default function Page() {
   const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
   const [loading, setLoading] = useState(false);
 
-  async function load() {
-    // ✅ 로그인 전이면 호출하지 않음
-    if (!apiKey) return;
+  // 프론트 캐시(Map) - 리렌더와 분리
+  const cacheRef = useRef(new Map());
 
+  // ✅ 로그인 안 되어 있으면 여기서만 return (Hook 뒤)
+  if (!apiKey) {
+    return <LoginGate onSave={save} />;
+  }
+
+  function cacheKeyOf(row) {
+    const sym = String(row?.symbol || "");
+    const type = String(row?.type || "");
+    return `${sym}|${type}`;
+  }
+
+  function getKeepMs(type) {
+    return KEEP_MS[type] ?? 0;
+  }
+
+  function rebuildRowsFromCache() {
+    const now = Date.now();
+    const cache = cacheRef.current;
+
+    // 만료 제거
+    for (const [k, v] of cache.entries()) {
+      if (!v?.expiresAt || v.expiresAt <= now) {
+        cache.delete(k);
+      }
+    }
+
+    // 캐시 -> 배열
+    const arr = [];
+    for (const v of cache.values()) {
+      if (!v?.row) continue;
+      arr.push({
+        ...v.row,
+        __firstSeenAt: v.firstSeenAt,
+        __lastSeenAt: v.lastSeenAt,
+        __expiresAt: v.expiresAt
+      });
+    }
+
+    setRows(arr);
+  }
+
+  async function load() {
     try {
       setLoading(true);
 
@@ -231,58 +268,98 @@ export default function Page() {
         headers: { "x-api-key": apiKey }
       });
 
-      let j;
-      try {
-        j = await r.json();
-      } catch {
-        const t = await r.text().catch(() => "");
-        throw new Error(`HTTP ${r.status} ${t.slice(0, 200)}`);
-      }
-
-      if (!r.ok) {
-        throw new Error(j?.error || `HTTP ${r.status}`);
-      }
-
+      const j = await r.json();
       setMeta({ ok: !!j.ok, updated: j.updated || "", error: j.error || "" });
-      setRows(Array.isArray(j.data) ? j.data : []);
+
+      const incoming = Array.isArray(j.data) ? j.data : [];
+      const now = Date.now();
+      const cache = cacheRef.current;
+
+      // 들어온 신호들을 캐시에 반영
+      for (const row of incoming) {
+        const type = String(row?.type || "");
+        // 전환확정/전환근접만 유지 대상 (그 외는 원래대로 표시 안 함)
+        if (type !== "전환확정" && type !== "전환근접") continue;
+
+        const keepMs = getKeepMs(type);
+        if (!keepMs) continue;
+
+        const key = cacheKeyOf(row);
+        const prev = cache.get(key);
+
+        if (!prev) {
+          // ✅ 새 신호: firstSeenAt = now (맨 위로 올릴 근거)
+          cache.set(key, {
+            row,
+            firstSeenAt: now,
+            lastSeenAt: now,
+            expiresAt: now + keepMs
+          });
+        } else {
+          // 기존 신호: row 갱신 + 만료 시간 연장
+          cache.set(key, {
+            row,
+            firstSeenAt: prev.firstSeenAt,
+            lastSeenAt: now,
+            expiresAt: now + keepMs
+          });
+        }
+      }
+
+      // 캐시 기반으로 렌더 rows 재구성
+      rebuildRowsFromCache();
     } catch (e) {
       setMeta({ ok: false, updated: "", error: String(e?.message || e) });
-      setRows([]);
+      // 에러가 나도 기존 캐시는 유지하고 싶으면 rows를 비우지 않음
+      // (원하면 아래 주석 해제 가능)
+      // setRows([]);
     } finally {
       setLoading(false);
     }
   }
 
+  // 자동 새로고침
   useEffect(() => {
-    if (!apiKey) return;
-
     load();
     const t = setInterval(load, refreshMs);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, refreshMs]);
+  }, [refreshMs, apiKey, BACKEND]);
+
+  // 캐시 만료 타이머(1초마다 만료 제거하여 “유지시간” 정확히)
+  useEffect(() => {
+    const t = setInterval(() => {
+      rebuildRowsFromCache();
+    }, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     let out = [...rows];
 
+    // 필터
     if (filterType === "CONFIRM") out = out.filter((r) => r.type === "전환확정");
     if (filterType === "NEAR") out = out.filter((r) => r.type === "전환근접");
 
-    if (sortKey === "ABS_DEV") {
-      out.sort((a, b) => absVal(b.deviationPct) - absVal(a.deviationPct));
-    } else if (sortKey === "UPDATED") {
-      out.sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
-    } else {
-      out.sort((a, b) => Number(a.rank) - Number(b.rank));
-    }
+    // ✅ 새 신호를 맨 위로: firstSeenAt 내림차순 우선
+    out.sort((a, b) => {
+      const fa = Number(a.__firstSeenAt || 0);
+      const fb = Number(b.__firstSeenAt || 0);
+      if (fb !== fa) return fb - fa;
+
+      // 그 다음은 사용자가 선택한 정렬
+      if (sortKey === "ABS_DEV") {
+        return absVal(b.deviationPct) - absVal(a.deviationPct);
+      } else if (sortKey === "UPDATED") {
+        return String(b.updated).localeCompare(String(a.updated));
+      } else {
+        return Number(a.rank) - Number(b.rank);
+      }
+    });
 
     return out;
   }, [rows, filterType, sortKey]);
-
-  // ✅ return은 Hook들 다 실행된 "맨 마지막"에서만 분기
-  if (!apiKey) {
-    return <LoginGate onSave={save} />;
-  }
 
   return (
     <div
@@ -298,6 +375,7 @@ export default function Page() {
         <button
           onClick={logout}
           style={{
+            marginLeft: 6,
             padding: "6px 10px",
             borderRadius: 10,
             border: "1px solid rgba(0,0,0,0.15)",
@@ -433,7 +511,7 @@ export default function Page() {
                   : "transparent";
 
                 return (
-                  <tr key={`${r.symbol}-${r.updated}`} style={{ background: bg }}>
+                  <tr key={`${r.symbol}|${r.type}`} style={{ background: bg }}>
                     <Td>{r.rank}</Td>
                     <Td style={{ fontWeight: 800 }}>{r.symbol}</Td>
                     <Td>{r.direction}</Td>
@@ -456,9 +534,11 @@ export default function Page() {
       </div>
 
       <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
-        * 전환확정=빨강, 전환근접=노랑
+        * 전환확정=빨강(3분 유지), 전환근접=노랑(1분 유지)
         <br />
-        * 이 대시보드는 백엔드 <code>/api/top30</code> 결과를 그대로 표시합니다.
+        * 새 신호는 맨 위로 표시됩니다.
+        <br />
+        * 이 대시보드는 백엔드 <code>/api/top30</code> 결과를 표시합니다.
       </div>
     </div>
   );
