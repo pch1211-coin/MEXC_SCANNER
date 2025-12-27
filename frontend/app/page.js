@@ -1,35 +1,47 @@
+
+```javascript
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 /** =========================
- *  Login (LocalStorage)
- *  ========================= */
+Login (LocalStorage)
+========================= */
 const LS_KEY = "MEXC_SCANNER_API_KEY";
 const LS_ROLE = "MEXC_SCANNER_ROLE"; // "admin" | "view"
 
 function useAuthKey() {
+  // 로딩 상태를 추가하여 localStorage 로딩 중임을 표시
+  const [isAuthLoaded, setIsAuthLoaded] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [role, setRole] = useState("view");
 
   useEffect(() => {
-    try {
-      const k = localStorage.getItem(LS_KEY) || "";
-      const r = localStorage.getItem(LS_ROLE) || "view";
-      setApiKey(k);
-      setRole(r);
-    } catch {
-      // localStorage 접근 실패 환경 대비
-      setApiKey("");
-      setRole("view");
-    }
+    const loadAuth = async () => { // async 함수로 변경
+      try {
+        const k = localStorage.getItem(LS_KEY) || "";
+        const r = localStorage.getItem(LS_ROLE) || "view";
+        setApiKey(k);
+        setRole(r);
+      } catch (e) {
+        console.error("localStorage access error:", e);
+        // localStorage 접근 실패 환경 대비
+        setApiKey("");
+        setRole("view");
+      } finally {
+        setIsAuthLoaded(true); // localStorage 로딩 완료 후 true로 설정
+      }
+    };
+    loadAuth(); // async 함수 호출
   }, []);
 
   const save = (k, r) => {
     try {
       localStorage.setItem(LS_KEY, k);
       localStorage.setItem(LS_ROLE, r);
-    } catch {}
+    } catch (e) {
+      console.error("localStorage save error:", e);
+    }
     setApiKey(k);
     setRole(r);
   };
@@ -38,12 +50,15 @@ function useAuthKey() {
     try {
       localStorage.removeItem(LS_KEY);
       localStorage.removeItem(LS_ROLE);
-    } catch {}
+    } catch (e) {
+      console.error("localStorage remove error:", e);
+    }
     setApiKey("");
     setRole("view");
   };
 
-  return { apiKey, role, save, logout };
+  // isAuthLoaded 값을 함께 반환
+  return { apiKey, role, save, logout, isAuthLoaded };
 }
 
 function LoginGate({ onSave }) {
@@ -61,7 +76,7 @@ function LoginGate({ onSave }) {
         justifyContent: "center",
         zIndex: 9999
       }}
-    >
+
       <div
         style={{
           width: 360,
@@ -72,7 +87,7 @@ function LoginGate({ onSave }) {
           padding: 16,
           boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
         }}
-      >
+
         <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>
           MEXC Scanner 로그인
         </div>
@@ -86,7 +101,7 @@ function LoginGate({ onSave }) {
             value={r}
             onChange={(e) => setR(e.target.value)}
             style={{ flex: 1, padding: 10, borderRadius: 10 }}
-          >
+
             <option value="view">읽기 전용</option>
             <option value="admin">관리자</option>
           </select>
@@ -114,7 +129,7 @@ function LoginGate({ onSave }) {
             fontWeight: 800,
             cursor: k.trim() ? "pointer" : "not-allowed"
           }}
-        >
+
           로그인
         </button>
       </div>
@@ -123,11 +138,11 @@ function LoginGate({ onSave }) {
 }
 
 /** =========================
- *  UI helpers
- *  ========================= */
+UI helpers
+========================= */
 const DEFAULT_REFRESH_MS = 5000;
-const CONFIRM_TTL_MS = 3 * 60 * 1000; // 3분
-const NEAR_TTL_MS = 1 * 60 * 1000;    // 1분
+const CONFIRM_TTL_MS = 3  60  1000; // 3분
+const NEAR_TTL_MS = 1  60  1000;    // 1분
 
 function fmt(n, digits = 6) {
   if (n === null || n === undefined) return "";
@@ -154,7 +169,7 @@ function Th({ children }) {
         top: 0,
         background: "rgba(0,0,0,0.04)"
       }}
-    >
+
       {children}
     </th>
   );
@@ -169,18 +184,19 @@ function Td({ children, style }) {
         fontSize: 13,
         ...style
       }}
-    >
+
       {children}
     </td>
   );
 }
 
 /** =========================
- *  Page
- *  ========================= */
+Page
+========================= */
 export default function Page() {
   // ✅ Hook은 무조건 최상단(조건부 return 위) — 이게 #310 방지 핵심
-  const { apiKey, role, save, logout } = useAuthKey();
+  // useAuthKey에서 isAuthLoaded 값을 받아서 사용
+  const { apiKey, role, save, logout, isAuthLoaded } = useAuthKey();
 
   const BACKEND =
     process.env.NEXT_PUBLIC_BACKEND_URL ||
@@ -198,7 +214,8 @@ export default function Page() {
   const storeRef = useRef(new Map()); // key: symbol, value: {row, firstSeen, lastSeen, expiresAt}
 
   // ✅ 로그인 전에는 여기서만 return (Hook 이후)
-  if (!apiKey) {
+  // isAuthLoaded가 false이면 LoginGate를 렌더링하지 않음
+  if (!isAuthLoaded || !apiKey) {
     return <LoginGate onSave={save} />;
   }
 
@@ -221,6 +238,14 @@ export default function Page() {
       });
 
       if (!r.ok || !j?.ok) {
+        // API 키 오류 시 로그아웃 기능 추가
+        if (r.status === 401 || r.status === 403) {
+          console.error("Authentication failed. Logging out.");
+          logout(); // 로그아웃 함수 호출
+          // Optionally, show a message to the user
+          setMeta({ ok: false, updated: "", error: "인증 오류로 로그아웃되었습니다. API 키를 확인해주세요." });
+          return; // 로딩 중단
+        }
         throw new Error(j?.error || `HTTP ${r.status}`);
       }
 
@@ -271,6 +296,13 @@ export default function Page() {
     } catch (e) {
       setMeta({ ok: false, updated: "", error: String(e?.message || e) });
       // rows는 유지(= TTL 남아있는 신호는 계속 보이게)
+      // API 키 오류 시에도 로그아웃 로직 추가
+      if (String(e).includes("401") || String(e).includes("403")) {
+        console.error("Authentication failed during fetch. Logging out.");
+        logout();
+        setMeta({ ok: false, updated: "", error: "인증 오류로 로그아웃되었습니다. API 키를 확인해주세요." });
+        return;
+      }
     } finally {
       setLoading(false);
     }
@@ -296,7 +328,7 @@ export default function Page() {
       clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshMs, apiKey, BACKEND]);
+  }, [refreshMs, apiKey, BACKEND]); // apiKey가 변경되면 갱신 로직 다시 시작
 
   // 만료 카운트다운 정리(1초마다 만료된 신호 제거)
   useEffect(() => {
@@ -346,13 +378,17 @@ export default function Page() {
     return out;
   }, [rows, filterType, sortKey]);
 
+  // API 키가 로딩되었지만 비어있는 경우 (예: localStorage에 없거나 삭제된 경우)
+  // !isAuthLoaded || !apiKey 조건으로 LoginGate가 렌더링되므로,
+  // 이 부분에서는 이미 apiKey가 존재함을 보장받음.
+
   return (
     <div
       style={{
         padding: 16,
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
       }}
-    >
+
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0 }}>MEXC Futures DASH</h2>
         <span style={{ fontSize: 12, opacity: 0.75 }}>backend: {BACKEND}</span>
@@ -368,7 +404,7 @@ export default function Page() {
             cursor: "pointer",
             fontWeight: 700
           }}
-        >
+
           로그아웃
         </button>
       </div>
@@ -389,7 +425,7 @@ export default function Page() {
         </div>
       </div>
 
-      {/* 컨트롤 */}
+      {/ 컨트롤 /}
       <div
         style={{
           marginTop: 14,
@@ -398,14 +434,14 @@ export default function Page() {
           gap: 10,
           alignItems: "end"
         }}
-      >
+
         <div>
           <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>필터</div>
           <select
             value={filterType}
             onChange={(e) => setFilterType(e.target.value)}
             style={{ width: "100%", padding: 10, borderRadius: 10 }}
-          >
+
             <option value="ALL">전체</option>
             <option value="CONFIRM">전환확정만</option>
             <option value="NEAR">전환근접만</option>
@@ -418,7 +454,7 @@ export default function Page() {
             value={sortKey}
             onChange={(e) => setSortKey(e.target.value)}
             style={{ width: "100%", padding: 10, borderRadius: 10 }}
-          >
+
             <option value="NEW">새 신호 순(맨 위)</option>
             <option value="ABS_DEV">Deviation(절대값) 큰 순</option>
             <option value="RANK">Rank 순</option>
@@ -431,7 +467,7 @@ export default function Page() {
             value={refreshMs}
             onChange={(e) => setRefreshMs(Number(e.target.value))}
             style={{ width: "100%", padding: 10, borderRadius: 10 }}
-          >
+
             <option value={5000}>5초</option>
             <option value={10000}>10초</option>
             <option value={30000}>30초</option>
@@ -448,12 +484,12 @@ export default function Page() {
             cursor: "pointer",
             fontWeight: 800
           }}
-        >
+
           지금 갱신
         </button>
       </div>
 
-      {/* 테이블 */}
+      {/ 테이블 /}
       <div
         style={{
           marginTop: 14,
@@ -461,7 +497,7 @@ export default function Page() {
           border: "1px solid rgba(0,0,0,0.1)",
           borderRadius: 14
         }}
-      >
+
         <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 920 }}>
           <thead>
             <tr>
@@ -520,12 +556,13 @@ export default function Page() {
       </div>
 
       <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
-        * 전환확정=3분 유지(빨강), 전환근접=1분 유지(노랑)
+전환확정=3분 유지(빨강), 전환근접=1분 유지(노랑)
         <br />
-        * 새 신호는 자동으로 맨 위에 올라옵니다.
+새 신호는 자동으로 맨 위에 올라옵니다.
         <br />
-        * 이 대시보드는 백엔드 <code>/api/top30</code> 결과를 기준으로 표시합니다.
+이 대시보드는 백엔드 <code>/api/top30</code> 결과를 기준으로 표시합니다.
       </div>
     </div>
   );
 }
+```
